@@ -27,6 +27,8 @@ export class Input {
   };
 
   private readonly onKeyDown = (e: KeyboardEvent) => {
+    // Don't hijack typing in form fields (e.g. the level-editor name input).
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
     if (e.code === "Space" || e.code === "ArrowUp") {
       e.preventDefault();
       if (!e.repeat) this.buffered = true;

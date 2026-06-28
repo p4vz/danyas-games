@@ -7,6 +7,8 @@ import { GameAudio } from "./audio";
 import { Engine } from "./engine";
 import { Input } from "./input";
 import { Renderer } from "./render";
+import { LevelEditor } from "./editor";
+import { deleteCustom, listCustom, saveCustom } from "./customLevels";
 
 const ACCENT = "#46e3ff";
 type State = "menu" | "playing" | "paused" | "gameover" | "complete";
@@ -25,6 +27,12 @@ class GeometryBeat implements Game {
   private audio: GameAudio | null = null;
   private engine: Engine | null = null;
   private current: Beatmap | null = null;
+
+  private editor: LevelEditor | null = null;
+  /** When true, a play session was launched from the editor's Test button, so
+   *  exiting the run returns to the editor (with the draft) instead of the menu. */
+  private fromEditor = false;
+  private editorDraft: Beatmap | null = null;
 
   private state: State = "menu";
   private deathTimer = 0;
@@ -64,6 +72,7 @@ class GeometryBeat implements Game {
   unmount(): void {
     this.loop.stop();
     this.audio?.stop();
+    this.editor?.destroy();
     this.input.dispose();
     this.topbar.removeEventListener("click", this.onTopbar);
     document.removeEventListener("visibilitychange", this.onVisibility);
@@ -155,8 +164,18 @@ class GeometryBeat implements Game {
   private readonly onTopbar = (e: Event) => {
     const act = (e.target as HTMLElement).closest("[data-act]")?.getAttribute("data-act");
     if (act === "pause") this.pause();
-    else if (act === "menu") this.showMenu();
+    else if (act === "menu") this.exitHub();
   };
+
+  /** Leave a run: back to the editor if we came from it, else the level menu. */
+  private exitHub(): void {
+    if (this.fromEditor && this.editorDraft) this.openEditor(this.editorDraft);
+    else this.showMenu();
+  }
+
+  private hubLabel(): string {
+    return this.fromEditor ? "Editor" : "Levels";
+  }
 
   private readonly onVisibility = () => {
     if (document.hidden && this.state === "playing") this.pause();
@@ -177,6 +196,9 @@ class GeometryBeat implements Game {
     this.state = "menu";
     this.loop.stop();
     this.audio?.stop();
+    this.closeEditor();
+    this.fromEditor = false;
+    this.editorDraft = null;
     if (this.deathTimer) clearTimeout(this.deathTimer);
     this.engine = null;
     this.topbar.classList.add("hidden");
@@ -194,22 +216,91 @@ class GeometryBeat implements Game {
         </button>`;
     }).join("");
 
+    const custom = listCustom();
+    const customRows = custom
+      .map(
+        (b) => `<div class="level-row">
+          <button class="btn btn--ghost level-row__play" data-level="${b.id}">
+            ${escapeHtml(b.name)} · <small>${b.notes.length} obstacles</small>
+          </button>
+          <button class="icon-btn" data-edit="${b.id}" aria-label="Edit">✎</button>
+          <button class="icon-btn" data-delete="${b.id}" aria-label="Delete">✕</button>
+        </div>`,
+      )
+      .join("");
+    const customSection = custom.length
+      ? `<h3 class="menu-subhead">Your levels</h3><div class="level-list">${customRows}</div>`
+      : "";
+
     this.showOverlay(`
       <h2>Geometry Beat</h2>
       <p>Tap or press Space to jump. Obstacles arrive on the beat — find the rhythm.</p>
       <div class="level-list">${levels}</div>
+      <button class="btn" data-act="create">＋ Create level</button>
+      ${customSection}
       <button class="btn btn--ghost" data-act="home">← All games</button>
     `);
 
     this.overlay.querySelectorAll<HTMLElement>("[data-level]").forEach((el) => {
       el.addEventListener("click", () => {
-        const map = BEATMAPS.find((b) => b.id === el.dataset.level);
+        const id = el.dataset.level!;
+        const map = BEATMAPS.find((b) => b.id === id) ?? custom.find((b) => b.id === id);
         if (map) this.startLevel(map);
       });
     });
+    this.overlay.querySelectorAll<HTMLElement>("[data-edit]").forEach((el) => {
+      el.addEventListener("click", () => {
+        const map = custom.find((b) => b.id === el.dataset.edit);
+        if (map) this.openEditor(map);
+      });
+    });
+    this.overlay.querySelectorAll<HTMLElement>("[data-delete]").forEach((el) => {
+      el.addEventListener("click", () => {
+        deleteCustom(el.dataset.delete!);
+        this.showMenu();
+      });
+    });
+    this.overlay
+      .querySelector('[data-act="create"]')
+      ?.addEventListener("click", () => this.openEditor());
     this.overlay
       .querySelector('[data-act="home"]')
       ?.addEventListener("click", () => navigate("#/"));
+  }
+
+  // ---- editor ----
+  private openEditor(initial?: Beatmap): void {
+    this.state = "menu";
+    this.loop.stop();
+    this.audio?.stop();
+    if (this.deathTimer) clearTimeout(this.deathTimer);
+    this.engine = null;
+    this.topbar.classList.add("hidden");
+    this.hideOverlay();
+    this.closeEditor();
+
+    this.editor = new LevelEditor(
+      {
+        onTest: (map) => {
+          this.fromEditor = true;
+          this.editorDraft = map;
+          this.closeEditor();
+          this.startLevel(map);
+        },
+        onSave: (map) => {
+          saveCustom(map);
+          this.showMenu();
+        },
+        onExit: () => this.showMenu(),
+      },
+      initial,
+    );
+    this.editor.mount(this.root);
+  }
+
+  private closeEditor(): void {
+    this.editor?.destroy();
+    this.editor = null;
   }
 
   private showPause(): void {
@@ -218,7 +309,7 @@ class GeometryBeat implements Game {
       <div class="btn-row">
         <button class="btn" data-act="resume">Resume</button>
         <button class="btn btn--ghost" data-act="retry">Restart</button>
-        <button class="btn btn--ghost" data-act="menu">Levels</button>
+        <button class="btn btn--ghost" data-act="menu">${this.hubLabel()}</button>
       </div>
     `);
     this.wireResultButtons();
@@ -230,7 +321,7 @@ class GeometryBeat implements Game {
       <p>Cleared <strong>${score}</strong> obstacles · best <strong>${best}</strong></p>
       <div class="btn-row">
         <button class="btn" data-act="retry">Retry</button>
-        <button class="btn btn--ghost" data-act="menu">Levels</button>
+        <button class="btn btn--ghost" data-act="menu">${this.hubLabel()}</button>
       </div>
     `);
     this.wireResultButtons();
@@ -242,7 +333,7 @@ class GeometryBeat implements Game {
       <p>Score <strong>${score}</strong> · best <strong>${best}</strong></p>
       <div class="btn-row">
         <button class="btn" data-act="retry">Play again</button>
-        <button class="btn btn--ghost" data-act="menu">Levels</button>
+        <button class="btn btn--ghost" data-act="menu">${this.hubLabel()}</button>
       </div>
     `);
     this.wireResultButtons();
@@ -254,10 +345,21 @@ class GeometryBeat implements Game {
         const act = el.dataset.act;
         if (act === "resume") this.resume();
         else if (act === "retry" && this.current) this.startLevel(this.current);
-        else if (act === "menu") this.showMenu();
+        else if (act === "menu") this.exitHub();
       });
     });
   }
+}
+
+const HTML_ESCAPES: Record<string, string> = {
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  '"': "&quot;",
+  "'": "&#39;",
+};
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => HTML_ESCAPES[c]);
 }
 
 export function createGeometryBeat(): Game {

@@ -29,3 +29,22 @@ export function saveBest(key: string, value: number): number {
   saveNumber(key, best);
   return best;
 }
+
+/** Load and parse a JSON value, returning `fallback` on miss or parse error. */
+export function loadJSON<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(PREFIX + key);
+    return raw === null ? fallback : (JSON.parse(raw) as T);
+  } catch {
+    return fallback;
+  }
+}
+
+/** Serialize and persist a JSON value. */
+export function saveJSON(key: string, value: unknown): void {
+  try {
+    localStorage.setItem(PREFIX + key, JSON.stringify(value));
+  } catch {
+    /* storage unavailable — ignore */
+  }
+}

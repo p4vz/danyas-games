@@ -84,6 +84,20 @@ sync even if the render loop drops frames on a weak device. Levels are authored 
 beatmaps (BPM + a list of `{ beat, type }` notes) in
 `src/games/geometry-beat/beatmap.ts`.
 
+The soundtrack itself is layered (limiter, feedback-delay lead, kick/snare/hats,
+8th-note bassline, melodic motifs) and each level carries an `intensity` that scales
+the mix, plus an optional `speed` scroll multiplier used for the harder levels.
+
+### Level editor
+
+From the Geometry Beat menu, **＋ Create level** opens a touch-friendly editor: tap a
+beat on the timeline to place the selected obstacle (spike / double / block). Obstacles
+snap to whole beats, and placement is **refused when it would sit closer than the
+solvable minimum gap** (`minGapBeats(bpm)` in `customLevels.ts`, derived from the fixed
+jump airtime) — so every level you build stays beatable. Test-play reuses the normal
+beat-driven engine; saved levels are stored in `localStorage` and appear under
+"Your levels" with edit/delete.
+
 ## Android build
 
 Capacitor config lives in `capacitor.config.ts` (app id `com.danyasgames.app`).
