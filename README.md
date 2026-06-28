@@ -6,6 +6,8 @@ low-end tablets. Prototypes are built for the **browser first**, then packaged t
 
 No ads. No tracking. No bulk.
 
+**Play it:** https://p4vz.github.io/danyas-games/
+
 ## Stack
 
 - **Vite + TypeScript** — fast dev server, tiny production bundles.
@@ -50,6 +52,19 @@ npm run typecheck  # tsc --noEmit
 npm run build      # type-check + production build to dist/
 npm run preview    # serve the built dist/
 ```
+
+## Deploy
+
+The web build is deployed to **GitHub Pages via GitHub Actions**
+(`.github/workflows/deploy.yml`). Every push to the deploy branch builds `dist/`
+and publishes it — no build artifacts are committed to git.
+
+One-time setup: in the repo, go to **Settings → Pages → Build and deployment** and
+set **Source** to **"GitHub Actions"**.
+
+The relative `base: './'` in `vite.config.ts` makes the app work both at the Pages
+project subpath (`/danyas-games/`) and from `file://` inside the Capacitor WebView,
+so the same build serves web and Android.
 
 ## Geometry Beat — how beat-sync works
 
