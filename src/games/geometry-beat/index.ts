@@ -95,7 +95,7 @@ class GeometryBeat implements Game {
   private startLevel(beatmap: Beatmap): void {
     this.current = beatmap;
     this.audio?.stop();
-    this.audio = new GameAudio(beatmap.bpm);
+    this.audio = new GameAudio(beatmap.bpm, beatmap.intensity);
     this.engine = new Engine(beatmap, this.input, {
       onScore: () => {},
       onDeath: () => this.onDeath(),

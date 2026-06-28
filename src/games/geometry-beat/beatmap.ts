@@ -13,6 +13,15 @@ export interface Beatmap {
   /** Difficulty label shown in the level list. */
   difficulty: string;
   bpm: number;
+  /**
+   * Scroll-speed multiplier (default 1). Higher = obstacles approach faster =
+   * less reaction time. Clearability is invariant to this (jump airtime is fixed
+   * in seconds while both obstacle X and the jump arc scale with pxPerBeat), so
+   * it is a pure reaction-difficulty knob — see engine.ts `layout()`.
+   */
+  speed?: number;
+  /** Music intensity forwarded to GameAudio: 0 chill, 1 drive, 2 rush. */
+  intensity?: number;
   /** Obstacles, sorted ascending by beat. */
   notes: Note[];
 }
@@ -91,6 +100,55 @@ export const BEATMAPS: Beatmap[] = [
       ],
       8,
       170,
+    ),
+  },
+  {
+    id: "hyperbeat",
+    name: "Hyperbeat",
+    difficulty: "Expert",
+    bpm: 160,
+    // Fast scroll + varied gaps so you can't just hold to bounce — every jump
+    // must be timed. Gaps stay >= ~2 beats (re-jump cadence at 160bpm).
+    speed: 1.35,
+    intensity: 2,
+    notes: buildNotes(
+      [
+        { gap: 2, type: "spike" },
+        { gap: 2, type: "spike" },
+        { gap: 3, type: "double" },
+        { gap: 2.5, type: "block" },
+        { gap: 2, type: "spike" },
+        { gap: 2.5, type: "double" },
+        { gap: 2, type: "spike" },
+        { gap: 3.5, type: "block" },
+      ],
+      8,
+      190,
+    ),
+  },
+  {
+    id: "mayhem",
+    name: "Mayhem",
+    difficulty: "Insane",
+    bpm: 176,
+    // At 176bpm a 2-beat gap (~0.68s) is below jump airtime, so spikes are
+    // spaced >= 2.5 beats; the brutal pace comes from the 1.6x scroll speed.
+    speed: 1.6,
+    intensity: 2,
+    notes: buildNotes(
+      [
+        { gap: 2.5, type: "spike" },
+        { gap: 2.5, type: "spike" },
+        { gap: 2.5, type: "double" },
+        { gap: 3, type: "block" },
+        { gap: 2.5, type: "spike" },
+        { gap: 3, type: "double" },
+        { gap: 2.5, type: "block" },
+        { gap: 2.5, type: "spike" },
+        { gap: 3, type: "double" },
+      ],
+      8,
+      210,
     ),
   },
 ];

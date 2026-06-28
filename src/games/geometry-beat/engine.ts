@@ -76,7 +76,7 @@ export class Engine {
     this.playerSize = clamp(height * 0.085, 26, 56);
     this.groundY = height * 0.8;
     this.playerX = clamp(width * 0.22, 70, width * 0.4);
-    this.pxPerBeat = Math.max(width * 0.32, 150);
+    this.pxPerBeat = Math.max(width * 0.32, 150) * (this.beatmap.speed ?? 1);
 
     const jumpHeight = this.playerSize * 3.1;
     const apex = 0.36; // seconds to top of jump
