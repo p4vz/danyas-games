@@ -1,0 +1,26 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+*.tsbuildinfo
+
+# editor / os
+.DS_Store
+.idea/
+.vscode/
+*.log
+
+# Capacitor / Android generated build artifacts
+# (the android/ project itself is committed; these generated parts are not)
+android/.gradle/
+android/build/
+android/app/build/
+android/captures/
+android/local.properties
+android/.idea/
+android/app/src/main/assets/public/
+android/app/src/main/assets/capacitor.config.json
+android/app/src/main/assets/capacitor.plugins.json
+.env
+.env.local

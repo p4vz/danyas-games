@@ -1,0 +1,5 @@
+package com.danyasgames.app;
+
+import com.getcapacitor.BridgeActivity;
+
+public class MainActivity extends BridgeActivity {}

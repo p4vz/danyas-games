@@ -1,0 +1,19 @@
+{
+  "name": "Danya's Games",
+  "short_name": "Danya's Games",
+  "description": "Lightweight, ad-free game clones that run on low-end tablets.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#0e0e16",
+  "theme_color": "#0e0e16",
+  "icons": [
+    {
+      "src": "./icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
