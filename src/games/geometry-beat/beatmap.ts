@@ -1,11 +1,28 @@
-/** A single obstacle, timed to a musical beat. */
-export type NoteType = "spike" | "double" | "block";
+/**
+ * A single point obstacle, timed to a musical beat.
+ * - spike/double/block sit on the floor (jump over / land on the block).
+ * - topspike hangs from the ceiling; avoid it by staying low (don't jump under it).
+ */
+export type NoteType = "spike" | "double" | "block" | "topspike";
 
 export interface Note {
   /** Beat at which this obstacle reaches the player's X position. */
   beat: number;
   type: NoteType;
 }
+
+/**
+ * Terrain spanning a beat range. Heights are in **playerSize units** so they are
+ * resolution-independent (see engine.ts `floorTopAt` / `ceilingAt`).
+ * - gap     — floor is absent; fall in = death, jump across.
+ * - ramp    — floor raised by `lift0`→`lift1` (linear); the grounded cube follows it.
+ * - ceiling — a ceiling `clear0`→`clear1` units above the floor; jumping into it = death.
+ *             A flat ceiling is a "no-jump tunnel"; a ramp + ceiling is an inclined tunnel.
+ */
+export type Segment =
+  | { kind: "gap"; from: number; to: number }
+  | { kind: "ramp"; from: number; to: number; lift0: number; lift1: number }
+  | { kind: "ceiling"; from: number; to: number; clear0: number; clear1: number };
 
 export interface Beatmap {
   id: string;
@@ -24,6 +41,38 @@ export interface Beatmap {
   intensity?: number;
   /** Obstacles, sorted ascending by beat. */
   notes: Note[];
+  /** Optional terrain (gaps, ramps, ceilings). Absent = classic flat ground. */
+  segments?: Segment[];
+}
+
+/** A no-jump tunnel: a flat ceiling `clear` units above the floor over [from,to]. */
+function tunnel(from: number, to: number, clear = 2): Segment {
+  return { kind: "ceiling", from, to, clear0: clear, clear1: clear };
+}
+
+/** A floor gap (hole) over [from,to]. */
+function gap(from: number, to: number): Segment {
+  return { kind: "gap", from, to };
+}
+
+/**
+ * An inclined tunnel: floor ramps 0→`lift` (then back to 0) with a ceiling held a
+ * constant `clear` above it, so the corridor slopes. Returns the ramp + ceiling.
+ */
+function inclinedTunnel(
+  from: number,
+  rampUpTo: number,
+  flatTo: number,
+  rampDownTo: number,
+  lift: number,
+  clear = 2,
+): Segment[] {
+  return [
+    { kind: "ramp", from, to: rampUpTo, lift0: 0, lift1: lift },
+    { kind: "ramp", from: rampUpTo, to: flatTo, lift0: lift, lift1: lift },
+    { kind: "ramp", from: flatTo, to: rampDownTo, lift0: lift, lift1: 0 },
+    { kind: "ceiling", from, to: rampDownTo, clear0: clear, clear1: clear },
+  ];
 }
 
 /**
@@ -150,6 +199,33 @@ export const BEATMAPS: Beatmap[] = [
       8,
       210,
     ),
+  },
+  {
+    id: "cavern",
+    name: "Cavern",
+    difficulty: "Tunnels",
+    bpm: 140,
+    speed: 1.1,
+    intensity: 1,
+    // Showcase of the terrain mechanics. Features are spaced so the cube is always
+    // grounded before a no-jump tunnel and has room to land after each jump.
+    notes: [
+      { beat: 8, type: "spike" },
+      { beat: 11, type: "spike" },
+      { beat: 18, type: "topspike" }, // after the gap — stay low, don't jump
+      { beat: 30, type: "spike" }, // after the flat tunnel
+      { beat: 33, type: "spike" },
+      { beat: 47, type: "spike" }, // after the inclined tunnel
+      { beat: 54, type: "topspike" }, // after the second gap
+      { beat: 57, type: "spike" },
+      { beat: 60, type: "spike" },
+    ],
+    segments: [
+      gap(14, 15.2), // jump across
+      tunnel(22, 28, 2), // flat no-jump tunnel
+      ...inclinedTunnel(36, 38, 42, 44, 2, 2), // ramp up, run through, ramp down
+      gap(50, 51.1), // jump across
+    ],
   },
 ];
 

@@ -67,7 +67,9 @@ export class Engine {
     private readonly cb: EngineCallbacks,
   ) {
     const notes = beatmap.notes;
-    this.lastBeat = notes.length ? notes[notes.length - 1].beat : 0;
+    let last = notes.length ? notes[notes.length - 1].beat : 0;
+    for (const s of beatmap.segments ?? []) last = Math.max(last, s.to);
+    this.lastBeat = last;
   }
 
   layout(width: number, height: number): void {
@@ -100,7 +102,43 @@ export class Engine {
         const bs = s * 1.1;
         return { type: note.type, x: centerX - bs / 2, y: this.groundY - bs, w: bs, h: bs };
       }
+      case "topspike":
+        // Hangs from above: base (wide) at top, tip pointing down. Safe to run
+        // under while grounded; deadly if you jump up into it.
+        return { type: note.type, x: centerX - s * 0.45, y: this.groundY - 3 * s, w: s * 0.9, h: s };
     }
+  }
+
+  /** Y of the floor surface under a beat column, or Infinity inside a gap. */
+  floorTopAt(beat: number): number {
+    let top = this.groundY;
+    for (const s of this.beatmap.segments ?? []) {
+      if (beat < s.from || beat >= s.to) continue;
+      if (s.kind === "gap") return Infinity;
+      if (s.kind === "ramp") {
+        const f = (beat - s.from) / (s.to - s.from);
+        top = this.groundY - (s.lift0 + (s.lift1 - s.lift0) * f) * this.playerSize;
+      }
+    }
+    return top;
+  }
+
+  /** Y of the ceiling bottom under a beat column, or -Infinity if open sky. */
+  ceilingAt(beat: number): number {
+    for (const s of this.beatmap.segments ?? []) {
+      if (s.kind !== "ceiling" || beat < s.from || beat >= s.to) continue;
+      const floor = this.floorTopAt(beat);
+      if (floor === Infinity) return -Infinity;
+      const f = (beat - s.from) / (s.to - s.from);
+      const clear = s.clear0 + (s.clear1 - s.clear0) * f;
+      return floor - clear * this.playerSize;
+    }
+    return -Infinity;
+  }
+
+  /** World beat at a screen x (inverse of obstacleRect's mapping). For the renderer. */
+  beatAtX(x: number, beat: number): number {
+    return beat + (x - (this.playerX + this.playerSize / 2)) / this.pxPerBeat;
   }
 
   update(dt: number, beat: number): void {
@@ -109,12 +147,16 @@ export class Engine {
       return;
     }
 
+    const floorTop = this.floorTopAt(beat);
+    const ceilY = this.ceilingAt(beat);
+
     // Jump (grounded + tap or hold).
     if (this.grounded && (this.input.consumeJump() || this.input.held)) {
       this.vy = this.jumpVel;
       this.grounded = false;
       this.spawnDust();
     }
+    const onFloor = this.grounded; // was grounded AND didn't jump this frame
 
     // Integrate.
     this.vy += this.gravity * dt;
@@ -125,14 +167,31 @@ export class Engine {
       this.rotation += dt * (Math.PI / 0.36); // ~half turn per jump arc
     }
 
+    // Resolve floor: stick to the surface (so the cube follows ramps), land from
+    // the air, or — over a gap (floorTop === Infinity) — keep falling.
     this.grounded = false;
+    if (floorTop !== Infinity) {
+      if (onFloor) {
+        this.playerY = floorTop - this.playerSize;
+        this.vy = 0;
+        this.grounded = true;
+      } else if (this.vy >= 0 && this.playerY + this.playerSize >= floorTop) {
+        this.playerY = floorTop - this.playerSize;
+        this.vy = 0;
+        this.grounded = true;
+        this.rotation = Math.round(this.rotation / (Math.PI / 2)) * (Math.PI / 2);
+      }
+    }
 
-    // Floor.
-    if (this.playerY >= this.playerTopOnGround) {
-      this.playerY = this.playerTopOnGround;
-      this.vy = 0;
-      this.grounded = true;
-      this.rotation = Math.round(this.rotation / (Math.PI / 2)) * (Math.PI / 2);
+    // Fell into a gap.
+    if (this.playerY > this.height + this.playerSize) {
+      this.die();
+      return;
+    }
+    // Jumped into a ceiling (tunnel).
+    if (ceilY !== -Infinity && this.playerY < ceilY) {
+      this.die();
+      return;
     }
 
     // Scoring: advance a cursor as obstacles pass the player.
@@ -171,6 +230,15 @@ export class Engine {
           continue;
         }
         if (horiz && pb > r.y + 2 && pt < r.y + r.h) {
+          this.die();
+          return;
+        }
+      } else if (r.type === "topspike") {
+        // Ceiling spike: deadly only if the player's head rises into it.
+        const hx = r.x + r.w * 0.18;
+        const hr = r.x + r.w * 0.82;
+        const tipY = r.y + r.h; // lowest point of the hanging spike
+        if (pr > hx && pl < hr && pt < tipY) {
           this.die();
           return;
         }

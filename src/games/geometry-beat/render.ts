@@ -44,14 +44,7 @@ export class Renderer {
 
     this.drawScrollingGrid(w, groundY, beat);
 
-    // Ground.
-    ctx.fillStyle = "#15151f";
-    ctx.fillRect(0, groundY, w, h - groundY);
-    ctx.fillStyle = this.accent;
-    ctx.globalAlpha = 0.5 + pulse * 0.5;
-    ctx.fillRect(0, groundY - 2, w, 3);
-    ctx.globalAlpha = 1;
-
+    this.drawTerrain(engine, beat, pulse);
     this.drawObstacles(engine, beat);
     this.drawParticles(engine);
     this.drawPlayer(engine);
@@ -71,6 +64,37 @@ export class Renderer {
     ctx.stroke();
   }
 
+  /** Floor (with ramps + gaps) and ceilings, sampled per column. */
+  private drawTerrain(engine: Engine, beat: number, pulse: number): void {
+    const { ctx } = this;
+    const { width: w, height: h } = engine;
+    const step = 8;
+    const lineAlpha = 0.5 + pulse * 0.5;
+    for (let x = 0; x < w; x += step) {
+      const b = engine.beatAtX(x + step / 2, beat);
+
+      const top = engine.floorTopAt(b);
+      if (top !== Infinity) {
+        ctx.fillStyle = "#15151f";
+        ctx.fillRect(x, top, step + 1, h - top);
+        ctx.globalAlpha = lineAlpha;
+        ctx.fillStyle = this.accent;
+        ctx.fillRect(x, top - 2, step + 1, 3);
+        ctx.globalAlpha = 1;
+      }
+
+      const ceil = engine.ceilingAt(b);
+      if (ceil !== -Infinity) {
+        ctx.fillStyle = "#15151f";
+        ctx.fillRect(x, 0, step + 1, ceil);
+        ctx.globalAlpha = lineAlpha;
+        ctx.fillStyle = this.accent;
+        ctx.fillRect(x, ceil - 1, step + 1, 3);
+        ctx.globalAlpha = 1;
+      }
+    }
+  }
+
   private drawObstacles(engine: Engine, beat: number): void {
     const { ctx } = this;
     ctx.fillStyle = this.accent;
@@ -83,6 +107,9 @@ export class Renderer {
         ctx.fillRect(r.x, r.y, r.w, r.h);
         ctx.fillStyle = "#ffffff22";
         ctx.fillRect(r.x, r.y, r.w, r.h * 0.25);
+      } else if (r.type === "topspike") {
+        ctx.fillStyle = "#ff5c7a";
+        this.spikeDown(r.x, r.y, r.w, r.h);
       } else if (r.type === "double") {
         ctx.fillStyle = this.accent;
         this.spike(r.x, r.y, r.w / 2, r.h);
@@ -100,6 +127,17 @@ export class Renderer {
     ctx.moveTo(x, y + h);
     ctx.lineTo(x + w / 2, y);
     ctx.lineTo(x + w, y + h);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  /** Spike hanging from the ceiling: base on top, tip pointing down. */
+  private spikeDown(x: number, y: number, w: number, h: number): void {
+    const { ctx } = this;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + w, y);
+    ctx.lineTo(x + w / 2, y + h);
     ctx.closePath();
     ctx.fill();
   }

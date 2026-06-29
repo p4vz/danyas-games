@@ -88,6 +88,13 @@ The soundtrack itself is layered (limiter, feedback-delay lead, kick/snare/hats,
 8th-note bassline, melodic motifs) and each level carries an `intensity` that scales
 the mix, plus an optional `speed` scroll multiplier used for the harder levels.
 
+Beyond the flat-ground spike/block obstacles, levels can include **terrain** via a
+`segments` array: **floor gaps** (jump across), **ramps** (the cube follows the slope),
+**ceilings / tunnels** (low-ceiling no-jump corridors — jumping into one is fatal), and
+**inclined tunnels** (a ramp with a parallel ceiling). There is also a **top-spike**
+obstacle that hangs from above — stay grounded to pass under it. See the "Cavern" level
+in `beatmap.ts` for an example using all of them.
+
 ### Level editor
 
 From the Geometry Beat menu, **＋ Create level** opens a touch-friendly editor: tap a
