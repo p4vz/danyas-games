@@ -45,12 +45,19 @@ export class Engine {
   private gravity = 0;
   private jumpVel = 0;
   private playerTopOnGround = 0;
+  private flyAccel = 0;
+  private vmaxFly = 0;
 
   // Player state.
   playerY = 0;
   private vy = 0;
   private grounded = true;
   rotation = 0;
+  /** True inside a fly segment (ship mode: hold to ascend). */
+  flying = false;
+  /** True while the fly thruster is firing (renderer draws the flame). */
+  thrusting = false;
+  private thrustAcc = 0;
 
   // Run state.
   dead = false;
@@ -84,6 +91,10 @@ export class Engine {
     const apex = 0.36; // seconds to top of jump
     this.gravity = (2 * jumpHeight) / (apex * apex);
     this.jumpVel = -this.gravity * apex;
+    // Ship mode: symmetric hold-to-ascend, tuned so the corridor can be crossed
+    // well within the authored 2-beat weave spacing.
+    this.flyAccel = this.gravity * 1.2;
+    this.vmaxFly = -this.jumpVel * 0.75;
 
     this.playerTopOnGround = this.groundY - this.playerSize;
     if (this.grounded) this.playerY = this.playerTopOnGround;
@@ -102,11 +113,28 @@ export class Engine {
         const bs = s * 1.1;
         return { type: note.type, x: centerX - bs / 2, y: this.groundY - bs, w: bs, h: bs };
       }
-      case "topspike":
-        // Hangs from above: base (wide) at top, tip pointing down. Safe to run
-        // under while grounded; deadly if you jump up into it.
-        return { type: note.type, x: centerX - s * 0.45, y: this.groundY - 3 * s, w: s * 0.9, h: s };
+      case "topspike": {
+        // Hangs from the ceiling when one exists (flight corridors), else from a
+        // fixed 2-cube clearance above the ground. Safe to pass under while low;
+        // deadly if you rise into it.
+        const ceil = this.ceilingAt(note.beat);
+        const base = ceil === -Infinity ? this.groundY - 3 * s : ceil;
+        return { type: note.type, x: centerX - s * 0.45, y: base, w: s * 0.9, h: s };
+      }
     }
+  }
+
+  /** True when `beat` falls inside a fly (ship mode) segment. */
+  flyingAt(beat: number): boolean {
+    for (const s of this.beatmap.segments ?? []) {
+      if (s.kind === "fly" && beat >= s.from && beat < s.to) return true;
+    }
+    return false;
+  }
+
+  /** Screen x of a world beat (inverse of beatAtX). For the renderer. */
+  xAtBeat(b: number, beat: number): number {
+    return this.playerX + this.playerSize / 2 + (b - beat) * this.pxPerBeat;
   }
 
   /** Y of the floor surface under a beat column, or Infinity inside a gap. */
@@ -149,47 +177,87 @@ export class Engine {
 
     const floorTop = this.floorTopAt(beat);
     const ceilY = this.ceilingAt(beat);
+    this.flying = this.flyingAt(beat);
 
-    // Jump (grounded + tap or hold).
-    if (this.grounded && (this.input.consumeJump() || this.input.held)) {
-      this.vy = this.jumpVel;
+    let prevBottom = this.playerY + this.playerSize;
+
+    if (this.flying) {
+      // Ship mode: hold to ascend, release to descend. Floor/ceiling contact is
+      // a safe slide; only spikes kill.
+      this.thrusting = this.input.held;
+      this.input.consumeJump(); // drain buffered taps so exit doesn't auto-jump
+      this.vy += (this.thrusting ? -this.flyAccel : this.flyAccel) * dt;
+      this.vy = clamp(this.vy, -this.vmaxFly, this.vmaxFly);
+      this.playerY += this.vy * dt;
+
+      if (floorTop !== Infinity && this.playerY + this.playerSize > floorTop) {
+        this.playerY = floorTop - this.playerSize;
+        this.vy = 0;
+      }
+      if (ceilY !== -Infinity && this.playerY < ceilY) {
+        this.playerY = ceilY;
+        this.vy = 0;
+      }
+      if (this.playerY < 0) {
+        this.playerY = 0;
+        this.vy = 0;
+      }
       this.grounded = false;
-      this.spawnDust();
-    }
-    const onFloor = this.grounded; // was grounded AND didn't jump this frame
+      // Tilt with vertical velocity instead of spinning.
+      this.rotation = clamp(this.vy / this.vmaxFly, -1, 1) * 0.35;
 
-    // Integrate.
-    this.vy += this.gravity * dt;
-    const prevBottom = this.playerY + this.playerSize;
-    this.playerY += this.vy * dt;
+      if (this.thrusting) {
+        this.thrustAcc += dt;
+        if (this.thrustAcc > 0.04) {
+          this.thrustAcc = 0;
+          this.spawnThrust();
+        }
+      }
+    } else {
+      this.thrusting = false;
 
-    if (!this.grounded) {
-      this.rotation += dt * (Math.PI / 0.36); // ~half turn per jump arc
-    }
+      // Jump (grounded + tap or hold).
+      if (this.grounded && (this.input.consumeJump() || this.input.held)) {
+        this.vy = this.jumpVel;
+        this.grounded = false;
+        this.spawnDust();
+      }
+      const onFloor = this.grounded; // was grounded AND didn't jump this frame
 
-    // Resolve floor: stick to the surface (so the cube follows ramps), land from
-    // the air, or — over a gap (floorTop === Infinity) — keep falling.
-    this.grounded = false;
-    if (floorTop !== Infinity) {
-      if (onFloor) {
-        this.playerY = floorTop - this.playerSize;
-        this.vy = 0;
-        this.grounded = true;
-      } else if (this.vy >= 0 && this.playerY + this.playerSize >= floorTop) {
-        this.playerY = floorTop - this.playerSize;
-        this.vy = 0;
-        this.grounded = true;
-        this.rotation = Math.round(this.rotation / (Math.PI / 2)) * (Math.PI / 2);
+      // Integrate.
+      this.vy += this.gravity * dt;
+      prevBottom = this.playerY + this.playerSize;
+      this.playerY += this.vy * dt;
+
+      if (!this.grounded) {
+        this.rotation += dt * (Math.PI / 0.36); // ~half turn per jump arc
+      }
+
+      // Resolve floor: stick to the surface (so the cube follows ramps), land from
+      // the air, or — over a gap (floorTop === Infinity) — keep falling.
+      this.grounded = false;
+      if (floorTop !== Infinity) {
+        if (onFloor) {
+          this.playerY = floorTop - this.playerSize;
+          this.vy = 0;
+          this.grounded = true;
+        } else if (this.vy >= 0 && this.playerY + this.playerSize >= floorTop) {
+          this.playerY = floorTop - this.playerSize;
+          this.vy = 0;
+          this.grounded = true;
+          this.rotation = Math.round(this.rotation / (Math.PI / 2)) * (Math.PI / 2);
+        }
+      }
+
+      // Jumped into a ceiling (tunnel) — fatal outside fly mode only.
+      if (ceilY !== -Infinity && this.playerY < ceilY) {
+        this.die();
+        return;
       }
     }
 
     // Fell into a gap.
     if (this.playerY > this.height + this.playerSize) {
-      this.die();
-      return;
-    }
-    // Jumped into a ceiling (tunnel).
-    if (ceilY !== -Infinity && this.playerY < ceilY) {
       this.die();
       return;
     }
@@ -282,6 +350,20 @@ export class Engine {
         size: 2 + Math.random() * 3,
       });
     }
+  }
+
+  private spawnThrust(): void {
+    const x = this.playerX;
+    const y = this.playerY + this.playerSize * (0.4 + Math.random() * 0.4);
+    this.particles.push({
+      x,
+      y,
+      vx: -180 - Math.random() * 120,
+      vy: (Math.random() - 0.5) * 60,
+      life: 0.25,
+      maxLife: 0.25,
+      size: 3 + Math.random() * 3,
+    });
   }
 
   private spawnBurst(): void {

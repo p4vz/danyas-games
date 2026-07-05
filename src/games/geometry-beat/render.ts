@@ -45,9 +45,43 @@ export class Renderer {
     this.drawScrollingGrid(w, groundY, beat);
 
     this.drawTerrain(engine, beat, pulse);
+    this.drawFlyZones(engine, beat, pulse);
     this.drawObstacles(engine, beat);
     this.drawParticles(engine);
-    this.drawPlayer(engine);
+    this.drawPlayer(engine, beat);
+  }
+
+  /** Tint fly-mode ranges and mark their entry/exit portals. */
+  private drawFlyZones(engine: Engine, beat: number, pulse: number): void {
+    const segs = engine.beatmap.segments;
+    if (!segs) return;
+    const { ctx } = this;
+    const { width: w, height: h } = engine;
+    for (const s of segs) {
+      if (s.kind !== "fly") continue;
+      const x0 = engine.xAtBeat(s.from, beat);
+      const x1 = engine.xAtBeat(s.to, beat);
+      if (x1 < 0 || x0 > w) continue;
+
+      ctx.globalAlpha = 0.05;
+      ctx.fillStyle = "#7a5cff";
+      ctx.fillRect(Math.max(0, x0), 0, Math.min(w, x1) - Math.max(0, x0), h);
+      ctx.globalAlpha = 1;
+
+      ctx.strokeStyle = "#7a5cff";
+      ctx.lineWidth = 3;
+      ctx.setLineDash([12, 10]);
+      ctx.globalAlpha = 0.5 + pulse * 0.5;
+      for (const x of [x0, x1]) {
+        if (x < -4 || x > w + 4) continue;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, h);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+    }
   }
 
   private drawScrollingGrid(w: number, groundY: number, beat: number): void {
@@ -142,7 +176,7 @@ export class Renderer {
     ctx.fill();
   }
 
-  private drawPlayer(engine: Engine): void {
+  private drawPlayer(engine: Engine, beat: number): void {
     const { ctx } = this;
     const s = engine.playerSize;
     const cx = engine.playerX + s / 2;
@@ -151,10 +185,35 @@ export class Renderer {
     ctx.save();
     ctx.translate(cx, cy);
     ctx.rotate(engine.rotation);
+
+    if (engine.thrusting) {
+      // Ship thruster flame, flickering with the beat subdivision.
+      const flicker = 0.5 + ((beat * 8) % 1) * 0.5;
+      ctx.fillStyle = "#ffb84d";
+      ctx.beginPath();
+      ctx.moveTo(-s / 2, -s * 0.18);
+      ctx.lineTo(-s / 2 - s * 0.55 * flicker, 0);
+      ctx.lineTo(-s / 2, s * 0.18);
+      ctx.closePath();
+      ctx.fill();
+    }
+
     ctx.fillStyle = engine.dead ? "#ff5c7a" : this.accent;
     ctx.fillRect(-s / 2, -s / 2, s, s);
     ctx.fillStyle = "#0a0a12";
     ctx.fillRect(-s * 0.22, -s * 0.22, s * 0.44, s * 0.44);
+
+    if (engine.flying) {
+      // A little nose fin so ship mode reads at a glance.
+      ctx.fillStyle = this.accent;
+      ctx.beginPath();
+      ctx.moveTo(s / 2, -s * 0.3);
+      ctx.lineTo(s * 0.95, 0);
+      ctx.lineTo(s / 2, s * 0.3);
+      ctx.closePath();
+      ctx.fill();
+    }
+
     ctx.restore();
   }
 

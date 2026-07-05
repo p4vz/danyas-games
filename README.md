@@ -95,6 +95,12 @@ Beyond the flat-ground spike/block obstacles, levels can include **terrain** via
 obstacle that hangs from above — stay grounded to pass under it. See the "Cavern" level
 in `beatmap.ts` for an example using all of them.
 
+**Flight mode**: a `fly` segment switches the cube into a ship between two dashed
+portals — hold to ascend, release to descend; floor and ceiling are safe to slide
+along, but the spikes still kill. The Expert ("Hyperbeat") and Insane ("Mayhem")
+levels are hand-authored compositions that sequence rhythm-cube sections, tunnel
+runs, flight-weave corridors, and gap gauntlets.
+
 ### Level editor
 
 From the Geometry Beat menu, **＋ Create level** opens a touch-friendly editor: tap a
