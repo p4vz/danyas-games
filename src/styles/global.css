@@ -482,3 +482,219 @@ body {
   flex: 1;
   min-width: 130px;
 }
+
+/* ---------- Slime Sports ---------- */
+.game-overlay--scroll {
+  justify-content: flex-start;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-top: max(24px, env(safe-area-inset-top));
+}
+
+.slime-title {
+  margin-top: 8px !important;
+}
+
+.slime-modes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
+  width: min(900px, 100%);
+}
+
+.slime-mode {
+  appearance: none;
+  font: inherit;
+  color: var(--fg);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 14px 12px 16px;
+  border-radius: 18px;
+  border: 2px solid #ffffff14;
+  background: radial-gradient(120% 120% at 50% 0%, color-mix(in srgb, var(--mode, #888) 30%, transparent), #1b1b2e 75%);
+  transition: transform 0.1s ease, border-color 0.1s ease;
+}
+
+.slime-mode:not(.slime-mode--soon):hover {
+  border-color: var(--mode);
+}
+
+.slime-mode:active {
+  transform: scale(0.97);
+}
+
+.slime-mode--soon {
+  opacity: 0.5;
+  cursor: default;
+  justify-content: center;
+}
+
+.slime-mode__art svg {
+  width: 150px;
+  height: 75px;
+}
+
+.slime-mode__name {
+  font-weight: 800;
+  font-size: 1.25rem;
+}
+
+.slime-mode__tag {
+  color: var(--fg-dim);
+  font-size: 0.9rem;
+}
+
+.slime-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(760px, 100%);
+}
+
+.slime-setup__row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: space-between;
+}
+
+.slime-setup__label {
+  color: var(--fg-dim);
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+}
+
+.seg {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  background: #ffffff0d;
+  padding: 4px;
+  border-radius: 12px;
+}
+
+.seg__btn {
+  appearance: none;
+  border: none;
+  font: inherit;
+  font-weight: 700;
+  color: var(--fg-dim);
+  background: transparent;
+  padding: 8px 14px;
+  border-radius: 9px;
+  cursor: pointer;
+}
+
+.seg__btn--on {
+  background: var(--accent);
+  color: #06060c;
+}
+
+.slime-pickers {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 12px;
+}
+
+.slime-picker {
+  background: #ffffff0a;
+  border: 1px solid #ffffff14;
+  border-radius: 16px;
+  padding: 12px;
+  text-align: left;
+}
+
+.slime-picker__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 8px;
+}
+
+.slime-chips {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
+  gap: 6px;
+}
+
+.slime-chip {
+  appearance: none;
+  cursor: pointer;
+  background: #ffffff08;
+  border: 2px solid transparent;
+  border-radius: 12px;
+  padding: 6px 2px 2px;
+  display: grid;
+  place-items: end center;
+}
+
+.slime-chip--on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.game-overlay .slime-picker__blurb {
+  margin: 8px 0;
+  max-width: none;
+  font-size: 0.9rem;
+}
+
+.slime-stats {
+  display: grid;
+  gap: 4px;
+}
+
+.slime-stat {
+  display: grid;
+  grid-template-columns: 56px 1fr;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8rem;
+  color: var(--fg-dim);
+}
+
+.slime-stat__bar {
+  height: 8px;
+  border-radius: 99px;
+  background: #ffffff14;
+  overflow: hidden;
+}
+
+.slime-stat__bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 99px;
+}
+
+.slime .pill {
+  font-size: 1.3rem;
+  letter-spacing: 0.04em;
+  text-shadow: 0 1px 2px #000;
+}
+
+.slime-score__sep {
+  color: var(--fg-dim);
+  margin: 0 4px;
+}
+
+.slime .game-topbar.hidden {
+  display: none;
+}
+
+.game-overlay .slime-rotate {
+  display: none;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+@media (orientation: portrait) {
+  .game-overlay .slime-rotate {
+    display: block;
+  }
+}

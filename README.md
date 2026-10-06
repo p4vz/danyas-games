@@ -27,7 +27,8 @@ src/
 ├── pages/landing.ts     # the game-grid landing page
 └── games/
     ├── registry.ts      # single source of truth for the collection
-    └── geometry-beat/   # first game (Geometry Dash clone, beat-synced)
+    ├── geometry-beat/   # first game (Geometry Dash clone, beat-synced)
+    └── slime/           # Slime Sports: volleyball, soccer, basketball
 ```
 
 ### Adding a game
@@ -110,6 +111,54 @@ solvable minimum gap** (`minGapBeats(bpm)` in `customLevels.ts`, derived from th
 jump airtime) — so every level you build stays beatable. Test-play reuses the normal
 beat-driven engine; saved levels are stored in `localStorage` and appear under
 "Your levels" with edit/delete.
+
+## Slime Sports — how it works
+
+A remake of the old Slime Volleyball / Soccer / Basketball flash games, built
+to grow more sports and online play later.
+
+```
+src/games/slime/
+├── index.ts        # shell: sport select, setup (characters, CPU, ball speed), match flow
+├── world.ts        # authoritative match sim: fixed 240 Hz steps, phases, scoring
+├── physics.ts      # pure functions: slime/ball/static collisions, impulses
+├── characters.ts   # playable slimes (size, mass, speed, accel, jump, bounce)
+├── ai.ts           # trajectory-predicting CPU
+├── predict.ts      # ball look-ahead into preallocated typed arrays
+├── input.ts        # drag-to-move touch (1 or 2 players) + keyboard
+├── render.ts       # canvas renderer, letterboxed world → screen
+├── sfx.ts          # synthesized hit / score sounds
+└── modes/          # one file per sport + registry
+```
+
+**Characters** differ in radius, mass, top speed, acceleration, jump and
+bounciness. Every collision (ball↔slime, slime↔slime) is an impulse exchange
+weighted by mass with a coefficient of restitution from the slimes' bounciness,
+so heavy slimes shove light ones and a bouncy slime launches the ball.
+
+**Touch**: the slime chases your finger's x at its own top speed and acceleration
+(drag too fast and it lags behind). Drag above it to jump — the higher the
+finger, the higher the jump. In 2-player mode each half of the screen controls
+one slime. Keyboard: A/D/W (left) and arrows (right).
+
+**Ball speed** is a time-scale on the ball only: the same arcs play faster or
+slower, so hits feel identical at any setting.
+
+**AI**: on every re-plan it simulates the ball forward with the real physics,
+searches a fan of contact angles for the earliest ground hit or timed jump it
+can make (given its own speed/accel/jump arc), computes the post-hit velocity
+with the same impulse maths, predicts *that* trajectory, and asks the sport how
+good the outcome is (lands far from the opponent / goes in / swishes). Easy,
+Medium and Hard differ in reaction time, look-ahead, aim noise and whether it
+plans jump shots.
+
+**Adding a sport**: create `modes/<sport>.ts` implementing `SlimeMode` (arena
+statics, ball spec, serve/scoring rules, an AI `evaluate` + `homeX`, artwork) and
+add it to `modes/index.ts`.
+
+**Multiplayer-ready**: the world only consumes per-side `Intent`s and is
+deterministic for a seed + input stream (seeded PRNG, fixed timestep), so an
+online mode can add a network `Controller` that relays intents.
 
 ## Android build
 

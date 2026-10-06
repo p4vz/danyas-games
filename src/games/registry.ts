@@ -1,5 +1,6 @@
 import type { GameFactory } from "../core/Game";
 import { createGeometryBeat } from "./geometry-beat";
+import { createSlimeSports } from "./slime";
 
 export type GameStatus = "playable" | "soon";
 
@@ -26,6 +27,14 @@ export const GAMES: GameEntry[] = [
     accent: "#46e3ff",
     status: "playable",
     factory: createGeometryBeat,
+  },
+  {
+    id: "slime",
+    title: "Slime Sports",
+    tagline: "Volleyball, soccer & basketball with bouncy slimes.",
+    accent: "#5be37d",
+    status: "playable",
+    factory: createSlimeSports,
   },
   {
     id: "block-stack",
