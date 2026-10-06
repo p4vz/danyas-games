@@ -91,7 +91,7 @@ export const CHARACTERS: SlimeCharacter[] = [
     maxSpeed: 380,
     accel: 2700,
     jump: 870,
-    bounce: 0.15,
+    bounce: 0.25,
   },
   {
     id: "leafy",

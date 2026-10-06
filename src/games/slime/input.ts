@@ -1,4 +1,3 @@
-import { SLIME_GRAVITY } from "./physics";
 import { idleIntent, type Controller, type Intent, type Side } from "./types";
 import type { World } from "./world";
 
@@ -124,7 +123,7 @@ export class HumanInput {
       const wantBase = w.y - s.char.radius * 0.5 - s.y;
       if (wantBase > 28) {
         intent.jump = true;
-        intent.jumpPower = Math.sqrt(2 * SLIME_GRAVITY * wantBase) / s.char.jump;
+        intent.jumpPower = Math.sqrt(2 * world.physics.gravity * wantBase) / s.char.jump;
       }
       return intent;
     }
