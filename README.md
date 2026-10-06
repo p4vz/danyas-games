@@ -127,7 +127,10 @@ src/games/slime/
 ├── ai.ts           # trajectory-predicting CPU
 ├── predict.ts      # ball look-ahead into preallocated typed arrays
 ├── headless.ts     # CPU-vs-CPU matches with no rendering (tests / tuning)
-├── input.ts        # drag-to-move touch (1 or 2 players) + keyboard
+├── input.ts        # maps joystick / drag / keyboard to per-player intents
+├── touchpad.ts     # on-screen joystick + aux button per local player
+├── controls.ts     # control settings, default layouts, placement maths
+├── controlsEditor.ts # drag-to-customise HUD layout editor
 ├── render.ts       # canvas renderer, letterboxed world → screen
 ├── sfx.ts          # synthesized hit / score sounds
 ├── modes/          # one file per sport + registry
@@ -141,10 +144,32 @@ so heavy slimes shove light ones and a bouncy slime launches the ball. Slimes
 can land on each other's heads, but domes are slippery: off centre you slide
 off.
 
-**Touch**: the slime chases your finger's x at its own top speed and acceleration
-(drag too fast and it lags behind). Drag above it to jump — the higher the
-finger, the higher the jump. In 2-player mode each half of the screen controls
-one slime. Keyboard: A/D/W (left) and arrows (right).
+**Touch controls**: each local player gets a virtual joystick (sideways
+deflection = run speed, push up = jump) and an aux button. In 2-player mode the
+sets are mirrored on each half of the screen, and every control captures its
+own finger, so co-op on one tablet just works. The joystick can be **fixed** or
+**floating** (it appears wherever your thumb lands on your side, and follows a
+thumb that slides past its edge). The older "drag slime" style (the slime
+chases your finger; drag above it to jump) is still available. The field
+keeps clear of the controls, either by lifting the floor above them or, on
+wide phones, by fitting them into the side margins, whichever leaves the
+bigger field.
+
+**Customise controls** (setup screen or pause menu) is a HUD layout editor:
+drag any control to move it, tap to select and resize it, set opacity, pick
+fixed or floating and joystick or drag. Separate 1- and 2-player layouts,
+saved on the device; *Reset* restores the defaults.
+
+**Aux button**, per sport (`SlimeMode.aux`):
+
+- Basketball, **GRAB**: hold to catch and carry the ball, let go to throw it
+  straight up (tilt the stick to aim). The other slime can knock it loose, it
+  auto-throws after 2.5 s, and you can't score while carrying.
+- Volleyball, **SET**, and soccer, **FLICK**: tap to pop a ball off your head
+  straight up.
+
+Keyboard: A/D move, W jump, S aux for the left player; arrows and ↓ for the
+right (either set in 1-player).
 
 **Ball speed** is a time-scale on the ball only: the same arcs play faster or
 slower, so hits feel identical at any setting.

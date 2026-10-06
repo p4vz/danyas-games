@@ -45,6 +45,14 @@ export class Sfx {
     this.blip(120, 0.07, "sine", 0.08 + strength * 0.12, 70);
   }
 
+  grab(): void {
+    this.blip(330, 0.08, "sine", 0.12, 520);
+  }
+
+  launch(): void {
+    this.blip(300, 0.14, "triangle", 0.14, 760);
+  }
+
   score(): void {
     this.blip(520, 0.12, "square", 0.06);
     setTimeout(() => this.blip(780, 0.22, "square", 0.06), 110);

@@ -35,6 +35,13 @@ export const volleyball: SlimeMode = {
   theme: { skyTop: "#2b6cb8", skyBottom: "#8fd3ff", ground: "#e8c98a", groundLine: "#c9a463" },
   winScores: [7, 11, 15],
   floorEndsRally: true,
+  aux: {
+    kind: "pop",
+    label: "SET",
+    launchSpeed: 700,
+    aimSpeed: 200,
+    hint: "SET pops a ball off your head straight up — then spike it.",
+  },
 
   slimeRange(side, radius) {
     return side === 0 ? [radius, NET_X - NET_R - radius] : [NET_X + NET_R + radius, W - radius];

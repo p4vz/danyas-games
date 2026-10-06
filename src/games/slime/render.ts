@@ -1,3 +1,4 @@
+import type { Footprint } from "./controls";
 import type { Finger } from "./input";
 import type { SlimeMode } from "./modes/mode";
 import { FIXED_DT, type SlimeBody } from "./physics";
@@ -34,6 +35,9 @@ export class SlimeRenderer {
   private k = 1;
   private ox = 0;
   private floorY = 0;
+  /** Space the on-screen controls need, and the strip actually reserved. */
+  private footprint: Footprint | null = null;
+  private bottomInset = 0;
   /** Static backdrop (sky, floor, arena art) pre-rendered once per layout. */
   private bg: HTMLCanvasElement | null = null;
   private bgKey = "";
@@ -56,11 +60,35 @@ export class SlimeRenderer {
     if (mode) this.layout(mode);
   }
 
+  /** Keep the field clear of the on-screen controls (see `Footprint`). */
+  setControlsFootprint(fp: Footprint | null, mode: SlimeMode): void {
+    const same = fp?.inset === this.footprint?.inset && fp?.margin === this.footprint?.margin;
+    if (same && this.layoutMode === mode) return;
+    this.footprint = fp;
+    this.bgKey = "";
+    this.layout(mode);
+  }
+
   private layout(mode: SlimeMode): void {
     const { width: W, height: H } = mode.arena;
-    this.k = Math.min(this.cssW / W, this.cssH / (H + GROUND_DEPTH));
+    const full = Math.min(this.cssW / W, this.cssH / (H + GROUND_DEPTH));
+    this.k = full;
+    this.bottomInset = 0;
+    const fp = this.footprint;
+    if (fp && fp.inset > GROUND_DEPTH * full) {
+      // Either lift the floor above the controls, or narrow the field so they
+      // sit in the side margins — whichever keeps the field bigger.
+      const lifted = Math.min(this.cssW / W, (this.cssH - fp.inset) / H);
+      const beside = Math.min(full, (this.cssW - 2 * fp.margin) / W);
+      if (lifted > beside) {
+        this.k = lifted;
+        this.bottomInset = fp.inset;
+      } else {
+        this.k = beside;
+      }
+    }
     this.ox = (this.cssW - W * this.k) / 2;
-    this.floorY = this.cssH - GROUND_DEPTH * this.k;
+    this.floorY = this.cssH - Math.max(GROUND_DEPTH * this.k, this.bottomInset);
     this.layoutMode = mode;
   }
 
@@ -69,7 +97,7 @@ export class SlimeRenderer {
    * never move — draw them once into an offscreen canvas and blit it.
    */
   private background(mode: SlimeMode): HTMLCanvasElement {
-    const key = `${mode.id}:${this.canvas.width}x${this.canvas.height}`;
+    const key = `${mode.id}:${this.canvas.width}x${this.canvas.height}:${this.bottomInset}`;
     if (this.bg && this.bgKey === key) return this.bg;
     if (this.layoutMode !== mode) this.layout(mode);
     const bg = this.bg ?? document.createElement("canvas");
@@ -132,6 +160,15 @@ export class SlimeRenderer {
     for (const s of world.slimes) this.drawSlime(s, world);
 
     mode.drawBall(ctx, ball.x, ball.y, r, world.ballAngle);
+    // Carried ball: ring runs down until the auto-throw.
+    if (world.holder !== null && mode.aux?.maxHold) {
+      const left = Math.max(0, 1 - world.holdTime / mode.aux.maxHold);
+      ctx.strokeStyle = world.slimes[world.holder].char.color;
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(ball.x, ball.y, r + 7, Math.PI / 2, Math.PI / 2 + left * Math.PI * 2);
+      ctx.stroke();
+    }
     // Hold-ring while the ball waits to drop.
     const hold = world.holdRemaining();
     if (hold > 0) {

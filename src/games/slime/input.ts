@@ -1,3 +1,4 @@
+import type { TouchPads } from "./touchpad";
 import { idleIntent, type Controller, type Intent, type Side } from "./types";
 import type { World } from "./world";
 
@@ -11,14 +12,18 @@ export interface Finger {
 /** Converts canvas CSS pixels to world coordinates (provided by the renderer). */
 export type ToWorld = (px: number, py: number) => { x: number; y: number };
 
+/** Stick dead-zone and the deflection that counts as "up = jump". */
+const STICK_DEADZONE = 0.12;
+const STICK_JUMP = 0.5;
+
 /**
- * Human input for one device: drag-to-move touch (one finger per side in
- * same-device 2P), plus keyboard (WASD for left, arrows for right — or both
- * for the left player in 1P).
- *
- * Touch model: the slime chases your finger's x at its own top speed and
- * acceleration, so a fast drag leaves it lagging behind. Drag above the slime
- * to jump — the higher your finger, the higher the jump.
+ * Human input for one device, for one or two local players:
+ *  - on-screen joystick + aux button per player (`TouchPads`): the stick's
+ *    sideways deflection sets run speed, pushing it up jumps;
+ *  - or "drag slime": the slime chases your finger's x at its own top speed
+ *    (a fast drag leaves it lagging); drag above it to jump, higher = higher;
+ *  - keyboard: A/D/W + S (aux) for the left player, arrows + ↓ for the right
+ *    (either set in 1P).
  */
 export class HumanInput {
   readonly fingers: [Finger | null, Finger | null] = [null, null];
@@ -30,6 +35,10 @@ export class HumanInput {
     private readonly toWorld: ToWorld,
     /** Which sides are human-controlled. */
     private readonly humans: [boolean, boolean],
+    /** On-screen controls (one set per human, in side order), if shown. */
+    private pads: TouchPads | null = null,
+    /** Allow drag-the-slime touch steering on the canvas. */
+    private dragEnabled = true,
   ) {
     canvas.addEventListener("pointerdown", this.onDown);
     canvas.addEventListener("pointermove", this.onMove);
@@ -51,6 +60,14 @@ export class HumanInput {
   reset(): void {
     this.fingers[0] = this.fingers[1] = null;
     this.keys.clear();
+    this.pads?.reset();
+  }
+
+  /** Swap in rebuilt on-screen controls (after editing the layout). */
+  setPads(pads: TouchPads | null, dragEnabled: boolean): void {
+    this.pads = pads;
+    this.dragEnabled = dragEnabled;
+    this.fingers[0] = this.fingers[1] = null;
   }
 
   controller(side: Side): Controller {
@@ -74,6 +91,7 @@ export class HumanInput {
   }
 
   private readonly onDown = (e: PointerEvent) => {
+    if (!this.dragEnabled) return;
     const [px, py] = this.local(e);
     const side = this.sideForPointer(px);
     if (side === null) return;
@@ -114,6 +132,12 @@ export class HumanInput {
     intent.jump = false;
     intent.jumpPower = 1;
 
+    const map = this.twoPlayer ? (side === 0 ? WASD : ARROWS) : BOTH;
+    const held = (keys: string[]) => keys.some((k) => this.keys.has(k));
+    // Pads are created one per human, in side order.
+    const pad = this.pads?.state[this.twoPlayer ? side : 0] ?? null;
+    intent.aux = held(map.aux) || (pad?.aux ?? false);
+
     const f = this.fingers[side];
     if (f) {
       const w = this.toWorld(f.px, f.py);
@@ -128,11 +152,14 @@ export class HumanInput {
       return intent;
     }
 
-    const map = this.twoPlayer ? (side === 0 ? WASD : ARROWS) : BOTH;
-    const left = map.left.some((k) => this.keys.has(k));
-    const right = map.right.some((k) => this.keys.has(k));
-    intent.moveX = (right ? 1 : 0) - (left ? 1 : 0);
-    intent.jump = map.up.some((k) => this.keys.has(k));
+    if (pad?.active) {
+      const ax = Math.abs(pad.x);
+      intent.moveX = ax < STICK_DEADZONE ? 0 : (Math.sign(pad.x) * (ax - STICK_DEADZONE)) / (1 - STICK_DEADZONE);
+      intent.jump = pad.y > STICK_JUMP;
+    }
+    const keyX = (held(map.right) ? 1 : 0) - (held(map.left) ? 1 : 0);
+    if (keyX !== 0) intent.moveX = keyX;
+    if (held(map.up)) intent.jump = true;
     return intent;
   }
 }
@@ -141,12 +168,14 @@ interface KeyMap {
   left: string[];
   right: string[];
   up: string[];
+  aux: string[];
 }
-const WASD: KeyMap = { left: ["KeyA"], right: ["KeyD"], up: ["KeyW"] };
-const ARROWS: KeyMap = { left: ["ArrowLeft"], right: ["ArrowRight"], up: ["ArrowUp"] };
+const WASD: KeyMap = { left: ["KeyA"], right: ["KeyD"], up: ["KeyW"], aux: ["KeyS"] };
+const ARROWS: KeyMap = { left: ["ArrowLeft"], right: ["ArrowRight"], up: ["ArrowUp"], aux: ["ArrowDown"] };
 const BOTH: KeyMap = {
   left: [...WASD.left, ...ARROWS.left],
   right: [...WASD.right, ...ARROWS.right],
   up: [...WASD.up, ...ARROWS.up, "Space"],
+  aux: [...WASD.aux, ...ARROWS.aux],
 };
-const KEY_CODES = new Set([...BOTH.left, ...BOTH.right, ...BOTH.up]);
+const KEY_CODES = new Set([...BOTH.left, ...BOTH.right, ...BOTH.up, ...BOTH.aux]);

@@ -10,6 +10,28 @@ export interface ScoreEvent {
   label: string;
 }
 
+/**
+ * The sport's auxiliary-button action.
+ *  - "grab": hold the button to catch and carry the ball on your head; let go
+ *    to throw it straight up (tilted by the stick). Opponents can knock it loose.
+ *  - "pop": tap to flick a ball that's on/near your head straight up.
+ */
+export interface AuxAction {
+  kind: "grab" | "pop";
+  /** Button label. */
+  label: string;
+  /** Label while holding the ball (grab). */
+  holdLabel?: string;
+  /** Upward launch speed (ball-time units). */
+  launchSpeed: number;
+  /** Extra sideways speed at full stick deflection. */
+  aimSpeed: number;
+  /** Grab: auto-throw after holding this long (s). */
+  maxHold?: number;
+  /** One-line explanation for the menu. */
+  hint: string;
+}
+
 export interface Theme {
   skyTop: string;
   skyBottom: string;
@@ -42,6 +64,8 @@ export interface SlimeMode {
   ball: BallSpec;
   arena: Arena;
   theme: Theme;
+  /** What the auxiliary button does in this sport (none if absent). */
+  aux?: AuxAction;
   /** Overrides for how slimes move in this sport (ice, low gravity…). */
   slimePhysics?: Partial<SlimePhysics>;
   /** Ball touching the floor ends the rally (volleyball) — the AI stops looking past it. */
