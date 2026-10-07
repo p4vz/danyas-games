@@ -38,7 +38,23 @@ export interface ControlSettings {
 export const CONTROLS_KEY = "slime.controls";
 export const MIN_SCALE = 0.6;
 export const MAX_SCALE = 1.6;
-const EDGE = 18;
+/**
+ * Default gaps from the screen edges. Kept clear of the OS gesture zones: on
+ * Android gesture navigation a swipe starting within ~24dp of a side edge is
+ * "Back", and a swipe up from the bottom edge is "Home" on Android and iPad —
+ * exactly what a thumb pushing the stick up to jump would do.
+ */
+const SIDE_GAP = 36;
+const BOTTOM_GAP = 30;
+
+/** Device safe-area insets (notches, rounded corners, home indicator), CSS px. */
+export interface Insets {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+export const NO_INSETS: Insets = { top: 0, right: 0, bottom: 0, left: 0 };
 
 const freshPlacement = (): Placement => ({ fx: null, fy: null, scale: 1 });
 const freshPlayer = (): PlayerControls => ({ stick: freshPlacement(), aux: freshPlacement() });
@@ -93,26 +109,39 @@ export interface Rect {
   size: number;
 }
 
-/** Default diameter for a control kind on this screen, before scaling. */
+/**
+ * Default diameter for a control kind on this screen, before scaling. On
+ * tablets the stick comes out ~23–29 mm and the aux button ~14–18 mm; phones
+ * get a 108 px floor (~17 mm) so a jump push is still a deliberate ~4 mm.
+ */
 export function baseSize(kind: ControlKind, w: number, h: number): number {
-  const stick = Math.max(96, Math.min(150, Math.min(w, h) * 0.24));
+  const stick = Math.round(Math.max(108, Math.min(150, Math.min(w, h) * 0.24)));
   return kind === "stick" ? stick : Math.round(stick * 0.62);
 }
 
 /** Default centre: sticks at the outer edges, aux buttons inboard (2P) or opposite (1P). */
-function defaultCentre(kind: ControlKind, layout: LayoutId, player: number, w: number, h: number): [number, number] {
+function defaultCentre(
+  kind: ControlKind,
+  layout: LayoutId,
+  player: number,
+  w: number,
+  h: number,
+  safe: Insets,
+): [number, number] {
   const stick = baseSize("stick", w, h);
   const aux = baseSize("aux", w, h);
-  const cy = h - stick / 2 - EDGE;
-  const stickX = stick / 2 + EDGE;
+  const cy = h - safe.bottom - BOTTOM_GAP - stick / 2;
+  const left = safe.left + SIDE_GAP;
+  const right = w - safe.right - SIDE_GAP;
   if (layout === "one") {
-    return kind === "stick" ? [stickX, cy] : [w - aux / 2 - EDGE * 2, cy];
+    return kind === "stick" ? [left + stick / 2, cy] : [right - aux / 2, cy];
   }
-  const fromLeft = kind === "stick" ? stickX : stick + EDGE * 2.5 + aux / 2;
-  return [player === 0 ? fromLeft : w - fromLeft, cy];
+  const inboard = stick + 24 + aux / 2;
+  if (player === 0) return [kind === "stick" ? left + stick / 2 : left + inboard, cy];
+  return [kind === "stick" ? right - stick / 2 : right - inboard, cy];
 }
 
-/** Resolve a placement to pixels, kept fully on screen. */
+/** Resolve a placement to pixels, kept fully inside the safe area. */
 export function resolve(
   p: Placement,
   kind: ControlKind,
@@ -120,20 +149,25 @@ export function resolve(
   player: number,
   w: number,
   h: number,
+  safe: Insets = NO_INSETS,
 ): Rect {
   const size = baseSize(kind, w, h) * p.scale;
-  const [dx, dy] = defaultCentre(kind, layout, player, w, h);
+  const [dx, dy] = defaultCentre(kind, layout, player, w, h, safe);
   const half = size / 2 + 4;
-  const cx = Math.max(half, Math.min(w - half, p.fx === null ? dx : p.fx * w));
-  const cy = Math.max(half, Math.min(h - half, p.fy === null ? dy : p.fy * h));
+  const cx = Math.max(safe.left + half, Math.min(w - safe.right - half, p.fx === null ? dx : p.fx * w));
+  const cy = Math.max(safe.top + half, Math.min(h - safe.bottom - half, p.fy === null ? dy : p.fy * h));
   return { cx, cy, size };
 }
 
 /** Where a floating joystick can be summoned: the player's side, lower 70%. */
-export function floatingZone(layout: LayoutId, player: number, w: number, h: number) {
-  const left = layout === "one" ? 0 : player === 0 ? 0 : w / 2;
-  const width = layout === "one" ? w * 0.55 : w / 2;
-  return { left, top: h * 0.3, width, height: h * 0.7 };
+export function floatingZone(layout: LayoutId, player: number, w: number, h: number, safe: Insets = NO_INSETS) {
+  const x0 = safe.left;
+  const x1 = w - safe.right;
+  const mid = (x0 + x1) / 2;
+  const left = layout === "one" || player === 0 ? x0 : mid;
+  const right = layout === "one" ? x0 + (x1 - x0) * 0.55 : player === 0 ? mid : x1;
+  const top = h * 0.3;
+  return { left, top, width: right - left, height: h - safe.bottom - top };
 }
 
 /**
@@ -149,13 +183,20 @@ export interface Footprint {
   margin: number;
 }
 
-export function footprint(s: ControlSettings, layout: LayoutId, w: number, h: number, withStick: boolean): Footprint {
+export function footprint(
+  s: ControlSettings,
+  layout: LayoutId,
+  w: number,
+  h: number,
+  withStick: boolean,
+  safe: Insets = NO_INSETS,
+): Footprint {
   let inset = 0;
   let margin = 0;
   playersFor(s, layout).forEach((pc, i) => {
     for (const kind of ["stick", "aux"] as const) {
       if (kind === "stick" && !withStick) continue;
-      const r = resolve(pc[kind], kind, layout, i, w, h);
+      const r = resolve(pc[kind], kind, layout, i, w, h, safe);
       if (r.cy < h * 0.6) continue;
       inset = Math.max(inset, h - (r.cy - r.size / 2) + 6);
       margin = Math.max(margin, r.cx < w / 2 ? r.cx + r.size / 2 : w - (r.cx - r.size / 2));

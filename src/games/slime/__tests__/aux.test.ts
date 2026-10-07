@@ -129,6 +129,36 @@ describe("grab (basketball)", () => {
     expect(w.holder).not.toBe(0);
   });
 
+  it("bumping the carrier knocks the ball loose", () => {
+    const w = playing(basketball);
+    ballOnHead(w);
+    w.step(intents({ aux: true }));
+    const carrier = w.slimes[0];
+    const thief = w.slimes[1];
+    thief.x = carrier.x + carrier.char.radius + thief.char.radius + 30;
+    let stolen = false;
+    for (let t = 0; t < 1 && !stolen; t += FIXED_DT) {
+      w.step(intents({ aux: true }, { targetX: carrier.x }));
+      stolen = w.events.some((e) => e.type === "steal" && e.side === 1);
+      w.events.length = 0;
+    }
+    expect(stolen).toBe(true);
+    expect(w.holder).toBeNull();
+    expect(w.ball.vy).toBeGreaterThan(0); // fumbled up into the air
+  });
+
+  it("carrying slows you down", () => {
+    const topSpeed = (hold: boolean) => {
+      const w = playing(basketball);
+      ballOnHead(w);
+      if (!hold) w.ball.x = 900; // well out of the way
+      run(w, 0.5, intents({ aux: hold, moveX: 1 }));
+      return w.slimes[0].vx;
+    };
+    expect(topSpeed(true)).toBeCloseTo(blue.maxSpeed * 0.75, 0);
+    expect(topSpeed(false)).toBeCloseTo(blue.maxSpeed, 0);
+  });
+
   it("the ball can't score while carried", () => {
     const w = playing(basketball);
     ballOnHead(w);

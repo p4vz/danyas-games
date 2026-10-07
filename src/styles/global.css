@@ -907,3 +907,10 @@ body {
   font-weight: 700;
   pointer-events: none;
 }
+
+.pads,
+.pads-editor {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}

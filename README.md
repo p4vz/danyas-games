@@ -155,6 +155,17 @@ keeps clear of the controls, either by lifting the floor above them or, on
 wide phones, by fitting them into the side margins, whichever leaves the
 bigger field.
 
+Default control sizes and spots are chosen for real devices. The stick is
+~23–29 mm across on tablets and the aux button ~14–18 mm, both well above the
+48dp / 44pt minimum touch targets; phones get a 17 mm floor. Defaults keep
+36 px from the side edges and 30 px from the bottom, out of Android's
+edge-swipe "Back" zone and the swipe-up "Home" zone a thumb pushing up to jump
+would otherwise hit. They also respect safe-area insets (notches, home
+indicator), and long-presses on the buttons never open a menu. "Up = jump"
+triggers past half deflection. A tighter angle cone was modelled and rejected:
+it cut accidental jumps while running only slightly and missed more deliberate
+diagonal run-jumps.
+
 **Customise controls** (setup screen or pause menu) is a HUD layout editor:
 drag any control to move it, tap to select and resize it, set opacity, pick
 fixed or floating and joystick or drag. Separate 1- and 2-player layouts,
@@ -162,9 +173,11 @@ saved on the device; *Reset* restores the defaults.
 
 **Aux button**, per sport (`SlimeMode.aux`):
 
-- Basketball, **GRAB**: hold to catch and carry the ball, let go to throw it
-  straight up (tilt the stick to aim). The other slime can knock it loose, it
-  auto-throws after 2.5 s, and you can't score while carrying.
+- Basketball, **GRAB**: hold to catch and carry the ball (at 75% speed), let go
+  to toss it straight up; tilting the stick lobs it a little, enough for a
+  lay-up, not a long-range auto-shot. Bumping the carrier (or touching the ball)
+  knocks it loose, it auto-throws after 2.5 s, and you can't score while
+  carrying.
 - Volleyball, **SET**, and soccer, **FLICK**: tap to pop a ball off your head
   straight up.
 
@@ -189,7 +202,14 @@ slower, so hits feel identical at any setting.
 5. executes the best plan.
 
 If it is jammed against a wall or the other slime with the ball going nowhere,
-it backs off, or jumps through the ball to dig it out of a corner. Easy, Medium
+it backs off, or jumps through the ball to dig it out of a corner.
+
+In basketball, Medium and Hard also use **GRAB**. With the ball on their head
+and no scoring hit lined up, they catch it and look for a shooting spot by
+trying throws from spots across their attacking half with the game's own
+launch maths (spread over several frames to avoid stutter). They walk there and
+let go as soon as a throw is predicted to go in, when they arrive, or when a
+defender closes in. When you're carrying, the CPU charges you to bump it loose. Easy, Medium
 and Hard differ in reaction time, look-ahead, how many options they try, and
 aim / timing noise. Unguarded in basketball, Hard sinks ~95% of the shots it
 plans.
