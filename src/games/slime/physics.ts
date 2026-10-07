@@ -12,6 +12,29 @@ import type { Intent, Side } from "./types";
 /** Simulation step (seconds). Small enough that a fast ball can't tunnel. */
 export const FIXED_DT = 1 / 240;
 export const SLIME_GRAVITY = 2400;
+
+/**
+ * How slimes move in a given sport. Modes override parts of this (ice for
+ * hockey, low gravity…); controllers and the AI read it from the world so
+ * their movement model always matches the simulation.
+ */
+export interface SlimePhysics {
+  /** Downward acceleration on slimes. */
+  gravity: number;
+  /** Multiplier on a character's acceleration while grounded (ice ≪ 1). */
+  traction: number;
+  /** Multiplier on a character's acceleration while airborne. */
+  airControl: number;
+}
+
+/** Grip multiplier when standing on another slime: domes are slippery. */
+const HEAD_TRACTION = 0.2;
+
+export const DEFAULT_SLIME_PHYSICS: SlimePhysics = {
+  gravity: SLIME_GRAVITY,
+  traction: 1,
+  airControl: 0.7,
+};
 /** Sideways speed used to un-wedge a slime that lands on a grounded ball. */
 const SQUIRT = 260;
 
@@ -26,6 +49,8 @@ export interface SlimeBody {
   vx: number;
   vy: number;
   grounded: boolean;
+  /** Standing on another slime's (slippery) head this step. */
+  onSlime: boolean;
   /** Allowed range for `x` (already shrunk by the radius). */
   minX: number;
   maxX: number;
@@ -69,10 +94,23 @@ export interface Capsule {
   restitution: number;
 }
 
+/**
+ * A one-way horizontal barrier: the ball passes down through it freely but
+ * bounces off its underside (e.g. a basketball hoop can't be entered from
+ * below).
+ */
+export interface Platform {
+  x0: number;
+  x1: number;
+  y: number;
+  restitution: number;
+}
+
 export interface Arena {
   width: number;
   height: number;
   statics: Capsule[];
+  platforms?: Platform[];
 }
 
 // ---------------------------------------------------------------- slimes
@@ -86,19 +124,26 @@ export function jumpVelocity(c: SlimeCharacter, power: number): number {
  * Velocity that reaches `target` as fast as possible yet still stops on it
  * (bang-bang braking curve). Prevents overshoot when following a finger.
  */
-function steerVelocity(dx: number, c: SlimeCharacter): number {
+function steerVelocity(dx: number, c: SlimeCharacter, accel: number): number {
   const d = Math.abs(dx);
   if (d < 0.5) return 0;
-  const v = Math.min(c.maxSpeed, Math.sqrt(2 * c.accel * d) * 0.92);
+  const v = Math.min(c.maxSpeed, Math.sqrt(2 * accel * d) * 0.92);
   return Math.sign(dx) * v;
 }
 
-export function applyIntent(s: SlimeBody, intent: Intent, dt: number): void {
+/** Ground acceleration of a character under a mode's physics. */
+export function groundAccel(c: SlimeCharacter, env: SlimePhysics): number {
+  return c.accel * env.traction;
+}
+
+export function applyIntent(s: SlimeBody, intent: Intent, dt: number, env: SlimePhysics): void {
   const c = s.char;
+  const accel = c.accel * (s.grounded ? env.traction * (s.onSlime ? HEAD_TRACTION : 1) : env.airControl);
   const desired =
-    intent.targetX !== null ? steerVelocity(intent.targetX - s.x, c) : intent.moveX * c.maxSpeed;
-  // Reduced air control: you commit to a jump.
-  const maxDv = c.accel * (s.grounded ? 1 : 0.7) * dt;
+    intent.targetX !== null
+      ? steerVelocity(intent.targetX - s.x, c, groundAccel(c, env))
+      : intent.moveX * c.maxSpeed;
+  const maxDv = accel * dt;
   const dv = desired - s.vx;
   s.vx += Math.max(-maxDv, Math.min(maxDv, dv));
   if (intent.jump && s.grounded) {
@@ -107,11 +152,12 @@ export function applyIntent(s: SlimeBody, intent: Intent, dt: number): void {
   }
 }
 
-export function integrateSlime(s: SlimeBody, dt: number): void {
-  s.vy -= SLIME_GRAVITY * dt;
+export function integrateSlime(s: SlimeBody, dt: number, env: SlimePhysics): void {
+  s.vy -= env.gravity * dt;
   s.x += s.vx * dt;
   s.y += s.vy * dt;
   s.grounded = false;
+  s.onSlime = false;
   if (s.y <= 0) {
     s.y = 0;
     if (s.vy < 0) s.vy = 0;
@@ -129,10 +175,11 @@ export function integrateSlime(s: SlimeBody, dt: number): void {
 /**
  * Slime↔slime contact. Domes are semicircles, so we test the *lower* slime's
  * dome against the *upper* slime's flat base: side-by-side this degenerates to
- * a horizontal push, and one landing on another's head gets a vertical normal
- * (and may stand / jump off it). Partially inelastic, mass-weighted.
+ * a horizontal push. On top of a head, the push follows the line between the
+ * two slimes and grip is low, so domes are slippery: off centre you slide
+ * downhill and fall off. Partially inelastic, mass-weighted.
  */
-export function collideSlimes(a: SlimeBody, b: SlimeBody): void {
+export function collideSlimes(a: SlimeBody, b: SlimeBody, dt: number, env: SlimePhysics): void {
   const up = a.y >= b.y ? a : b;
   const lo = up === a ? b : a;
   const R1 = up.char.radius;
@@ -151,6 +198,14 @@ export function collideSlimes(a: SlimeBody, b: SlimeBody): void {
     dy /= d;
   }
   const depth = R2 - d;
+  if (dy > 0.5) {
+    // Head contact: normal from the lower dome's centre to the upper base.
+    const hx = up.x - lo.x;
+    const hy = Math.max(up.y - lo.y, 1);
+    const hl = Math.hypot(hx, hy);
+    dx = hx / hl;
+    dy = hy / hl;
+  }
   const invU = 1 / up.char.mass;
   const invL = 1 / lo.char.mass;
   const sum = invU + invL;
@@ -171,8 +226,10 @@ export function collideSlimes(a: SlimeBody, b: SlimeBody): void {
     if (!lo.grounded) lo.vy -= j * dy * invL;
   }
   if (dy > 0.6) {
-    // Standing on the other slime's head.
+    // Standing on the other slime's head: slide downhill along the dome.
     up.grounded = true;
+    up.onSlime = true;
+    up.vx += dx * env.gravity * dt;
     if (up.vy < lo.vy) up.vy = lo.vy;
   }
   for (const s of [up, lo]) {
@@ -215,6 +272,7 @@ export function stepBall(
     b.vx *= k;
     b.vy *= k;
   }
+  const prevTop = b.y + r;
   b.x += b.vx * h;
   b.y += b.vy * h;
 
@@ -240,6 +298,15 @@ export function stepBall(
   } else if (b.x > arena.width - r) {
     b.x = arena.width - r;
     if (b.vx > 0) b.vx = -b.vx * spec.wallRestitution;
+  }
+  // One-way platforms: block a rising ball from below.
+  if (arena.platforms && b.vy > 0) {
+    for (const p of arena.platforms) {
+      if (prevTop <= p.y && b.y + r > p.y && b.x > p.x0 && b.x < p.x1) {
+        b.y = p.y - r;
+        b.vy = -b.vy * p.restitution;
+      }
+    }
   }
   // Static capsules.
   for (const c of arena.statics) {
@@ -333,7 +400,9 @@ export function ballSlimeImpulse(
   v.svx -= j * nx * invS;
   v.svy -= j * ny * invS;
   const sep = (v.bvx - v.svx) * nx + (v.bvy - v.svy) * ny;
-  if (sep < minPop) {
+  // The pop keeps volleys alive off the dome; never use it to hammer a ball
+  // that's underneath the slime down into the floor.
+  if (ny > 0 && sep < minPop) {
     const add = minPop - sep;
     v.bvx += add * nx;
     v.bvy += add * ny;
@@ -349,9 +418,9 @@ export function ballSlimeRestitution(s: SlimeBody, spec: BallSpec): number {
 export function collideBallSlime(s: SlimeBody, b: Ball, spec: BallSpec, scratch: Contact, v: Velocities): number {
   if (!slimeBallContact(s, b, spec.radius, scratch)) return 0;
   const { nx, ny, depth } = scratch;
-  // Separate. The light ball moves — unless it's pinned on the floor and being
-  // pushed down, in which case the slime is lifted off it instead.
-  if (ny < 0 && b.y <= spec.radius + 0.5) {
+  // Separate. The light ball moves — unless that would push it into the floor,
+  // in which case the slime is lifted off it instead.
+  if (ny < 0 && (b.y - spec.radius < 3 || b.y + ny * depth < spec.radius + 0.5)) {
     s.x -= nx * depth;
     s.y -= ny * depth;
     // A slime sitting on a floor-pinned ball would deadlock; make it slide

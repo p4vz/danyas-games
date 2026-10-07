@@ -4,12 +4,15 @@ import { loadJSON, saveJSON } from "../../core/storage";
 import { navigate } from "../../router";
 import { AiController, type Difficulty } from "./ai";
 import { CHARACTERS, characterStats, getCharacter, type SlimeCharacter } from "./characters";
+import { footprint, loadControls, type ControlSettings, type LayoutId } from "./controls";
+import { ControlsEditor } from "./controlsEditor";
 import { HumanInput } from "./input";
 import { MODES, getMode } from "./modes";
 import type { SlimeMode } from "./modes/mode";
 import { FIXED_DT } from "./physics";
 import { SlimeRenderer, type Banner } from "./render";
 import { Sfx } from "./sfx";
+import { TouchPads, hasTouch } from "./touchpad";
 import type { Controller, Side } from "./types";
 import { SCORED_TIME, World } from "./world";
 
@@ -54,6 +57,7 @@ class SlimeSports implements Game {
   private root!: HTMLElement;
   private canvas!: HTMLCanvasElement;
   private overlay!: HTMLElement;
+  private padHost!: HTMLElement;
   private topbar!: HTMLElement;
   private scorePill!: HTMLElement;
 
@@ -65,6 +69,9 @@ class SlimeSports implements Game {
   private world: World | null = null;
   private input: HumanInput | null = null;
   private controllers: [Controller, Controller] | null = null;
+  private controls: ControlSettings = loadControls();
+  private pads: TouchPads | null = null;
+  private editor: ControlsEditor | null = null;
   private accumulator = 0;
   private state: State = "menu";
   private notice: { text: string; until: number } | null = null;
@@ -74,6 +81,7 @@ class SlimeSports implements Game {
     this.root.className = "game-root slime";
     this.root.innerHTML = `
       <canvas></canvas>
+      <div class="pads-host"></div>
       <div class="game-topbar hidden">
         <button class="icon-btn" data-act="menu" aria-label="Back">‹</button>
         <span class="pill" data-score>0 : 0</span>
@@ -84,6 +92,7 @@ class SlimeSports implements Game {
     container.appendChild(this.root);
     this.canvas = this.root.querySelector("canvas")!;
     this.overlay = this.root.querySelector(".game-overlay")!;
+    this.padHost = this.root.querySelector(".pads-host")!;
     this.topbar = this.root.querySelector(".game-topbar")!;
     this.scorePill = this.root.querySelector("[data-score]")!;
     this.root.style.setProperty("--accent", ACCENT);
@@ -100,6 +109,7 @@ class SlimeSports implements Game {
 
   unmount(): void {
     this.loop.stop();
+    this.editor?.destroy();
     this.endMatch();
     this.sfx.close();
     this.topbar.removeEventListener("click", this.onTopbar);
@@ -110,7 +120,13 @@ class SlimeSports implements Game {
   resize(): void {
     const w = this.root.clientWidth || window.innerWidth;
     const h = this.root.clientHeight || window.innerHeight;
-    this.renderer.resize(w, h, this.world?.mode ?? getMode(this.settings.mode));
+    const mode = this.world?.mode ?? getMode(this.settings.mode);
+    this.renderer.resize(w, h, mode);
+    this.pads?.layoutControls();
+    // Keep the field clear of the on-screen controls so no slime hides under a thumb.
+    const withStick = this.controls.style === "joystick";
+    const fp = this.pads ? footprint(this.controls, this.layoutId(), w, h, withStick) : null;
+    this.renderer.setControlsFootprint(fp, mode);
     if (this.world && this.state !== "playing") this.draw();
   }
 
@@ -132,6 +148,7 @@ class SlimeSports implements Game {
     });
     const humans: [boolean, boolean] = [true, st.players === 2];
     this.input = new HumanInput(this.canvas, this.renderer.toWorld, humans);
+    this.buildPads();
     this.controllers = [
       this.input.controller(0),
       humans[1] ? this.input.controller(1) : new AiController(1, st.difficulty),
@@ -149,6 +166,8 @@ class SlimeSports implements Game {
   private endMatch(): void {
     this.input?.dispose();
     this.input = null;
+    this.pads?.dispose();
+    this.pads = null;
     this.controllers = null;
     this.world = null;
   }
@@ -165,6 +184,7 @@ class SlimeSports implements Game {
       steps++;
     }
     if (steps === MAX_STEPS) this.accumulator = 0;
+    this.syncAuxLabels(world);
     this.drainEvents(world);
     this.draw();
     if (world.phase === "over" && this.state === "playing") this.onMatchOver(world);
@@ -178,11 +198,63 @@ class SlimeSports implements Game {
         this.updateScore();
         if (world.winner !== null) this.sfx.win();
         else this.sfx.score();
-      } else if (ev.type === "reserve") {
+      } else if (ev.type === "grab") this.sfx.grab();
+      else if (ev.type === "launch") this.sfx.launch();
+      else if (ev.type === "steal") this.sfx.hit(0.6);
+      else if (ev.type === "reserve") {
         this.notice = { text: "Re-serve", until: world.time + 1.2 };
       }
     }
     world.events.length = 0;
+  }
+
+  // ------------------------------------------------------------ controls
+
+  private layoutId(): LayoutId {
+    return this.settings.players === 2 ? "two" : "one";
+  }
+
+  /** (Re)build the on-screen joystick + aux buttons for the current match. */
+  private buildPads(): void {
+    this.pads?.dispose();
+    this.pads = null;
+    const world = this.world;
+    if (!world) return;
+    if (hasTouch()) {
+      const colors = world.slimes.map((s) => s.char.color);
+      this.pads = new TouchPads(this.padHost, this.controls, this.layoutId(), colors, world.mode.aux?.label ?? null);
+    }
+    const drag = !this.pads || this.controls.style === "drag";
+    this.input?.setPads(this.pads, drag);
+    this.resize();
+  }
+
+  /** Grab sports: the button reads THROW while you carry the ball. */
+  private syncAuxLabels(world: World): void {
+    const aux = world.mode.aux;
+    if (!this.pads || aux?.kind !== "grab") return;
+    const humans = this.settings.players === 2 ? [0, 1] : [0];
+    humans.forEach((side, i) => {
+      this.pads!.setAuxLabel(i, world.holder === side ? (aux.holdLabel ?? aux.label) : aux.label);
+    });
+  }
+
+  /** Open the HUD layout editor; `back` re-shows whatever screen opened it. */
+  private openControls(back: () => void): void {
+    const mode = getMode(this.settings.mode);
+    const chars = this.settings.chars.map((id) => getCharacter(id).color) as [string, string];
+    this.hideOverlay();
+    this.editor = new ControlsEditor(this.root, this.controls, {
+      layout: this.layoutId(),
+      colors: chars,
+      auxLabel: mode.aux?.label ?? "ACTION",
+      onDone: (settings) => {
+        this.editor = null;
+        this.controls = settings;
+        if (this.world) this.buildPads();
+        back();
+      },
+    });
   }
 
   private draw(): void {
@@ -264,10 +336,17 @@ class SlimeSports implements Game {
       <div class="btn-row">
         <button class="btn" data-act="resume">Resume</button>
         <button class="btn btn--ghost" data-act="rematch">Restart</button>
+        <button class="btn btn--ghost" data-act="pause-controls">Controls</button>
         <button class="btn btn--ghost" data-act="setup">Quit match</button>
       </div>
     `);
     this.wireActs();
+  }
+
+  /** Pause screen again after editing controls mid-match. */
+  private repause(): void {
+    this.state = "playing";
+    this.pause();
   }
 
   private resume(): void {
@@ -304,6 +383,8 @@ class SlimeSports implements Game {
         else if (act === "modes") this.showModeSelect();
         else if (act === "home") navigate("#/");
         else if (act === "start") this.startMatch();
+        else if (act === "controls") this.openControls(() => this.showSetup());
+        else if (act === "pause-controls") this.openControls(() => this.repause());
       });
     });
   }
@@ -349,7 +430,9 @@ class SlimeSports implements Game {
     this.showOverlay(
       `
       <h2 class="slime-title">Slime Sports</h2>
-      <p>Pick a sport. Drag your slime with your finger — drag up to jump.</p>
+      <p>Pick a sport. ${
+        hasTouch() ? "Move with the joystick, push it up to jump." : "Move with A/D or ←/→, jump with W or ↑."
+      }</p>
       <p class="slime-rotate">Tip: turn your device sideways for a bigger field.</p>
       <div class="slime-modes">
         ${cards}
@@ -389,6 +472,7 @@ class SlimeSports implements Game {
       `
       <h2 class="slime-title" style="color:${mode.accent}">${mode.name}</h2>
       <p>${mode.howTo}</p>
+      ${mode.aux ? `<p class="slime-aux-hint">${mode.aux.hint}</p>` : ""}
       <div class="slime-setup">
         <div class="slime-setup__row">
           <span class="slime-setup__label">Players</span>
@@ -429,6 +513,11 @@ class SlimeSports implements Game {
             LENGTHS.map((l, i) => ({ label: `${l} · ${mode.winScores[i]}`, value: String(i) })),
             String(st.length),
           )}
+        </div>
+        <div class="slime-setup__row">
+          <span class="slime-setup__label">Controls</span>
+          <span class="slime-keys">${this.keysHint(mode)}</span>
+          <button class="btn btn--ghost btn--small" data-act="controls">Customize ⚙</button>
         </div>
         <div class="slime-setup__row">
           <span class="slime-setup__label">Ball path</span>
@@ -487,6 +576,16 @@ class SlimeSports implements Game {
       });
     });
     this.wireActs();
+  }
+
+  private keysHint(mode: SlimeMode): string {
+    const label = mode.aux?.label;
+    if (hasTouch()) {
+      const style = this.controls.style === "joystick" ? "Joystick" : "Drag slime";
+      return label ? `${style} + ${label} button` : style;
+    }
+    if (this.settings.players === 2) return `P1: A D W${label ? " S" : ""} · P2: ← → ↑${label ? " ↓" : ""}`;
+    return `A/D or ←/→ move · W/↑ jump${label ? ` · S/↓ ${label}` : ""}`;
   }
 
   private pickerHtml(side: Side, label: string): string {

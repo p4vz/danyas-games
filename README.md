@@ -50,6 +50,7 @@ Other scripts:
 
 ```bash
 npm run typecheck  # tsc --noEmit
+npm test           # vitest: physics, simulation and CPU-vs-CPU tests
 npm run build      # type-check + production build to dist/
 npm run preview    # serve the built dist/
 ```
@@ -125,40 +126,101 @@ src/games/slime/
 ├── characters.ts   # playable slimes (size, mass, speed, accel, jump, bounce)
 ├── ai.ts           # trajectory-predicting CPU
 ├── predict.ts      # ball look-ahead into preallocated typed arrays
-├── input.ts        # drag-to-move touch (1 or 2 players) + keyboard
+├── headless.ts     # CPU-vs-CPU matches with no rendering (tests / tuning)
+├── input.ts        # maps joystick / drag / keyboard to per-player intents
+├── touchpad.ts     # on-screen joystick + aux button per local player
+├── controls.ts     # control settings, default layouts, placement maths
+├── controlsEditor.ts # drag-to-customise HUD layout editor
 ├── render.ts       # canvas renderer, letterboxed world → screen
 ├── sfx.ts          # synthesized hit / score sounds
-└── modes/          # one file per sport + registry
+├── modes/          # one file per sport + registry
+└── __tests__/      # physics, world and CPU-vs-CPU match tests (vitest)
 ```
 
 **Characters** differ in radius, mass, top speed, acceleration, jump and
 bounciness. Every collision (ball↔slime, slime↔slime) is an impulse exchange
 weighted by mass with a coefficient of restitution from the slimes' bounciness,
-so heavy slimes shove light ones and a bouncy slime launches the ball.
+so heavy slimes shove light ones and a bouncy slime launches the ball. Slimes
+can land on each other's heads, but domes are slippery: off centre you slide
+off.
 
-**Touch**: the slime chases your finger's x at its own top speed and acceleration
-(drag too fast and it lags behind). Drag above it to jump — the higher the
-finger, the higher the jump. In 2-player mode each half of the screen controls
-one slime. Keyboard: A/D/W (left) and arrows (right).
+**Touch controls**: each local player gets a virtual joystick (sideways
+deflection = run speed, push up = jump) and an aux button. In 2-player mode the
+sets are mirrored on each half of the screen, and every control captures its
+own finger, so co-op on one tablet just works. The joystick can be **fixed** or
+**floating** (it appears wherever your thumb lands on your side, and follows a
+thumb that slides past its edge). The older "drag slime" style (the slime
+chases your finger; drag above it to jump) is still available. The field
+keeps clear of the controls, either by lifting the floor above them or, on
+wide phones, by fitting them into the side margins, whichever leaves the
+bigger field.
+
+**Customise controls** (setup screen or pause menu) is a HUD layout editor:
+drag any control to move it, tap to select and resize it, set opacity, pick
+fixed or floating and joystick or drag. Separate 1- and 2-player layouts,
+saved on the device; *Reset* restores the defaults.
+
+**Aux button**, per sport (`SlimeMode.aux`):
+
+- Basketball, **GRAB**: hold to catch and carry the ball, let go to throw it
+  straight up (tilt the stick to aim). The other slime can knock it loose, it
+  auto-throws after 2.5 s, and you can't score while carrying.
+- Volleyball, **SET**, and soccer, **FLICK**: tap to pop a ball off your head
+  straight up.
+
+Keyboard: A/D move, W jump, S aux for the left player; arrows and ↓ for the
+right (either set in 1-player).
 
 **Ball speed** is a time-scale on the ball only: the same arcs play faster or
 slower, so hits feel identical at any setting.
 
-**AI**: on every re-plan it simulates the ball forward with the real physics,
-searches a fan of contact angles for the earliest ground hit or timed jump it
-can make (given its own speed/accel/jump arc), computes the post-hit velocity
-with the same impulse maths, predicts *that* trajectory, and asks the sport how
-good the outcome is (lands far from the opponent / goes in / swishes). Easy,
-Medium and Hard differ in reaction time, look-ahead, aim noise and whether it
-plans jump shots.
+**AI**: on every re-plan it
 
-**Adding a sport**: create `modes/<sport>.ts` implementing `SlimeMode` (arena
-statics, ball spec, serve/scoring rules, an AI `evaluate` + `homeX`, artwork) and
-add it to `modes/index.ts`.
+1. simulates the ball forward with the real physics,
+2. searches a fan of contact angles for ground hits and timed jumps it could
+   make (given its own speed / accel / jump arc), including tilted contacts when
+   a wall or the net stops it standing in the ideal spot,
+3. **verifies each idea by replaying its own steering and jump through the
+   game's movement and collision code**, so the contact point, angle and
+   velocities are the ones that will actually happen,
+4. applies the game's impulse maths at that contact, predicts the ball's next
+   path, and asks the sport how good the outcome is (lands far from the
+   opponent / goes in / swishes),
+5. executes the best plan.
+
+If it is jammed against a wall or the other slime with the ball going nowhere,
+it backs off, or jumps through the ball to dig it out of a corner. Easy, Medium
+and Hard differ in reaction time, look-ahead, how many options they try, and
+aim / timing noise. Unguarded in basketball, Hard sinks ~95% of the shots it
+plans.
+
+**Adding a sport**: create `modes/<sport>.ts` implementing `SlimeMode` and add it
+to `modes/index.ts`. A mode provides:
+
+- `arena`: walls, `statics` (rounded segments: nets, crossbars, rims) and
+  one-way `platforms` (e.g. the hoop: balls drop through, never come up);
+- `ball`: radius, mass, gravity, bounciness, minimum pop off a slime, …;
+- `slimePhysics` (optional): overrides for slime gravity, ground `traction`
+  (ice ≪ 1) and air control. Movement, touch and the AI all use it;
+- rules: `serve`, `nextServer`, `checkRules`, plus optional `onTouch` and
+  `createRallyData`. The world tracks per-rally state in `world.rally`
+  (touches per side, consecutive touches, last touch, floor bounces per half,
+  and a mode-specific `data` bag), so "one bounce per side" (tennis) or "three
+  touches max" are a few lines;
+- AI hooks: `evaluate` (rate a predicted ball path) and `homeX`;
+- art: `drawArena` (static, rendered once and cached), `drawForeground`,
+  `drawBall`.
 
 **Multiplayer-ready**: the world only consumes per-side `Intent`s and is
-deterministic for a seed + input stream (seeded PRNG, fixed timestep), so an
-online mode can add a network `Controller` that relays intents.
+deterministic for a seed + input stream (seeded PRNG, fixed timestep). It has no
+DOM dependencies, so it can also run server-side as the authoritative host for
+online play.
+
+**Tests**: `npm test` runs the vitest suite (also in CI): physics rules
+(momentum, restitution, slippery heads, the hoop can't be entered from below),
+determinism, predictor vs. live simulation, rally state, mode physics
+overrides, and seeded CPU-vs-CPU matches for every sport (finishes, ball rarely
+stuck, Hard beats Easy, an unguarded CPU scores).
 
 ## Android build
 

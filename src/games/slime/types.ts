@@ -26,9 +26,11 @@ export interface Intent {
   jump: boolean;
   /** 0..1 fraction of the character's full jump velocity. */
   jumpPower: number;
+  /** Auxiliary action button held (grab / set — depends on the sport). */
+  aux: boolean;
 }
 
-export const idleIntent = (): Intent => ({ targetX: null, moveX: 0, jump: false, jumpPower: 1 });
+export const idleIntent = (): Intent => ({ targetX: null, moveX: 0, jump: false, jumpPower: 1, aux: false });
 
 /** Anything that can drive a slime. */
 export interface Controller {

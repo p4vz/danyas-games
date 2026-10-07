@@ -1,4 +1,4 @@
-import type { Arena, Ball, BallSpec, SlimeBody } from "../physics";
+import type { Arena, Ball, BallSpec, SlimeBody, SlimePhysics } from "../physics";
 import type { BallPath } from "../predict";
 import type { Side } from "../types";
 import type { World } from "../world";
@@ -8,6 +8,28 @@ export interface ScoreEvent {
   points: number;
   /** Big banner text, e.g. "GOAL!" */
   label: string;
+}
+
+/**
+ * The sport's auxiliary-button action.
+ *  - "grab": hold the button to catch and carry the ball on your head; let go
+ *    to throw it straight up (tilted by the stick). Opponents can knock it loose.
+ *  - "pop": tap to flick a ball that's on/near your head straight up.
+ */
+export interface AuxAction {
+  kind: "grab" | "pop";
+  /** Button label. */
+  label: string;
+  /** Label while holding the ball (grab). */
+  holdLabel?: string;
+  /** Upward launch speed (ball-time units). */
+  launchSpeed: number;
+  /** Extra sideways speed at full stick deflection. */
+  aimSpeed: number;
+  /** Grab: auto-throw after holding this long (s). */
+  maxHold?: number;
+  /** One-line explanation for the menu. */
+  hint: string;
 }
 
 export interface Theme {
@@ -42,6 +64,10 @@ export interface SlimeMode {
   ball: BallSpec;
   arena: Arena;
   theme: Theme;
+  /** What the auxiliary button does in this sport (none if absent). */
+  aux?: AuxAction;
+  /** Overrides for how slimes move in this sport (ice, low gravity…). */
+  slimePhysics?: Partial<SlimePhysics>;
   /** Ball touching the floor ends the rally (volleyball) — the AI stops looking past it. */
   floorEndsRally?: boolean;
   /** Points to win for Short / Standard / Long matches. */
@@ -57,8 +83,12 @@ export interface SlimeMode {
   nextServer(scorer: Side | null): Side | null;
   /** Place the ball for a new rally. */
   serve(ball: Ball, server: Side | null, rng: () => number): void;
-  /** Check scoring after a physics step. */
+  /** Check scoring after a physics step (`world.rally` has touch/bounce counts). */
   checkRules(ctx: RuleContext): ScoreEvent | null;
+  /** Called when a slime starts a new touch (after `world.rally` is updated). */
+  onTouch?(world: World, side: Side): ScoreEvent | null;
+  /** Initial mode-specific counters for `world.rally.data` each rally. */
+  createRallyData?(): Record<string, number>;
 
   // ---- AI hooks ----
   /**
@@ -70,6 +100,7 @@ export interface SlimeMode {
   homeX(world: World, side: Side): number;
 
   // ---- art (world coordinates, y-up) ----
+  /** Static arena art. Rendered once per layout and cached, so it must not animate. */
   drawArena(ctx: CanvasRenderingContext2D): void;
   /** Foreground pieces drawn over the ball/slimes (nets, goal mesh). */
   drawForeground?(ctx: CanvasRenderingContext2D): void;

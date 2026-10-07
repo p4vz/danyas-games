@@ -60,9 +60,24 @@ export const basketball: SlimeMode = {
     minPop: 220,
     maxSpeed: 1500,
   },
-  arena: { width: W, height: H, statics: [...hoopStatics(false), ...hoopStatics(true)] },
+  arena: {
+    width: W,
+    height: H,
+    statics: [...hoopStatics(false), ...hoopStatics(true)],
+    // The net: a ball can drop through the hoop but never come up through it.
+    platforms: OPENING.map(([x0, x1]) => ({ x0, x1, y: RIM_Y, restitution: 0.3 })),
+  },
   theme: { skyTop: "#1c1530", skyBottom: "#3b2c5a", ground: "#c98a4b", groundLine: "#a46a33" },
   winScores: [11, 21, 31],
+  aux: {
+    kind: "grab",
+    label: "GRAB",
+    holdLabel: "THROW",
+    launchSpeed: 1000,
+    aimSpeed: 420,
+    maxHold: 2.5,
+    hint: "Hold GRAB to catch and carry the ball, let go to throw (aim with the stick). Bump a carrier to steal!",
+  },
 
   slimeRange: (_side, radius) => [radius, W - radius],
   startX: (side) => (side === 0 ? 260 : W - 260),
@@ -76,7 +91,7 @@ export const basketball: SlimeMode = {
   checkRules({ world, ball, prevX, prevY }) {
     const scorer = basketBetween(prevX, prevY, ball.x, ball.y);
     if (scorer === null) return null;
-    const t = world.lastTouch;
+    const t = world.rally.lastTouch;
     const three = t !== null && t.side === scorer && Math.abs(t.x - rimCentre(other(scorer))) > THREE_DIST;
     return { scorer, points: three ? 3 : 2, label: three ? "THREE!" : "SWISH!" };
   },
@@ -89,14 +104,18 @@ export const basketball: SlimeMode = {
       const who = basketBetween(path.x[i - 1], path.y[i - 1], path.x[i], path.y[i]);
       if (who === side) return 3.2 - (path.t[i] - t0) * 0.2;
       if (who === other(side)) return -4;
-      if (path.vy[i] < 0 && path.y[i] > RIM_Y - 40) {
+      // A near miss only counts coming down from *above* the rim — a ball
+      // bounced off the underside of the net is not a shot.
+      if (path.vy[i] < 0 && path.y[i] >= RIM_Y) {
         best = Math.min(best, Math.hypot(path.x[i] - target, path.y[i] - RIM_Y));
       }
     }
-    const last = path.length - 1;
-    const progress = (attackDir(side) * (path.x[last] - W / 2)) / (W / 2);
+    // Otherwise, aim to leave the ball at a good shooting spot in front of
+    // their hoop — not jammed in the corner behind it.
+    const sweet = target - attackDir(side) * 260;
+    const position = 1 - Math.abs(path.x[path.length - 1] - sweet) / 500;
     const near = best === Infinity ? 0 : 1 - Math.min(1, best / 380);
-    return clamp(near * 1.6 + progress * 0.4, -1, 2);
+    return clamp(near * 1.6 + position * 0.5, -1, 2);
   },
   homeX(world: World, side: Side) {
     const hoop = rimCentre(side);

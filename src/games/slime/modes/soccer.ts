@@ -46,6 +46,13 @@ export const soccer: SlimeMode = {
   },
   theme: { skyTop: "#123a6b", skyBottom: "#3d7fc0", ground: "#3fa34d", groundLine: "#2d7d39" },
   winScores: [3, 5, 9],
+  aux: {
+    kind: "pop",
+    label: "FLICK",
+    launchSpeed: 780,
+    aimSpeed: 260,
+    hint: "FLICK pops the ball up off your head for a header.",
+  },
 
   slimeRange: (_side, radius) => [radius, W - radius],
   startX: (side) => (side === 0 ? 260 : W - 260),

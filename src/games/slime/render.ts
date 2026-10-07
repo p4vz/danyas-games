@@ -1,3 +1,4 @@
+import type { Footprint } from "./controls";
 import type { Finger } from "./input";
 import type { SlimeMode } from "./modes/mode";
 import { FIXED_DT, type SlimeBody } from "./physics";
@@ -34,7 +35,13 @@ export class SlimeRenderer {
   private k = 1;
   private ox = 0;
   private floorY = 0;
-  private sky: CanvasGradient | null = null;
+  /** Space the on-screen controls need, and the strip actually reserved. */
+  private footprint: Footprint | null = null;
+  private bottomInset = 0;
+  /** Static backdrop (sky, floor, arena art) pre-rendered once per layout. */
+  private bg: HTMLCanvasElement | null = null;
+  private bgKey = "";
+  private layoutMode: SlimeMode | null = null;
   private readonly preview = new BallPath(120);
 
   constructor(
@@ -53,32 +60,58 @@ export class SlimeRenderer {
     if (mode) this.layout(mode);
   }
 
-  private layout(mode: SlimeMode): void {
-    const { width: W, height: H } = mode.arena;
-    this.k = Math.min(this.cssW / W, this.cssH / (H + GROUND_DEPTH));
-    this.ox = (this.cssW - W * this.k) / 2;
-    this.floorY = this.cssH - GROUND_DEPTH * this.k;
-    const g = this.ctx.createLinearGradient(0, 0, 0, this.floorY);
-    g.addColorStop(0, mode.theme.skyTop);
-    g.addColorStop(1, mode.theme.skyBottom);
-    this.sky = g;
+  /** Keep the field clear of the on-screen controls (see `Footprint`). */
+  setControlsFootprint(fp: Footprint | null, mode: SlimeMode): void {
+    const same = fp?.inset === this.footprint?.inset && fp?.margin === this.footprint?.margin;
+    if (same && this.layoutMode === mode) return;
+    this.footprint = fp;
+    this.bgKey = "";
+    this.layout(mode);
   }
 
-  /** Canvas CSS pixels → world units. */
-  readonly toWorld = (px: number, py: number) => ({
-    x: (px - this.ox) / this.k,
-    y: (this.floorY - py) / this.k,
-  });
+  private layout(mode: SlimeMode): void {
+    const { width: W, height: H } = mode.arena;
+    const full = Math.min(this.cssW / W, this.cssH / (H + GROUND_DEPTH));
+    this.k = full;
+    this.bottomInset = 0;
+    const fp = this.footprint;
+    if (fp && fp.inset > GROUND_DEPTH * full) {
+      // Either lift the floor above the controls, or narrow the field so they
+      // sit in the side margins — whichever keeps the field bigger.
+      const lifted = Math.min(this.cssW / W, (this.cssH - fp.inset) / H);
+      const beside = Math.min(full, (this.cssW - 2 * fp.margin) / W);
+      if (lifted > beside) {
+        this.k = lifted;
+        this.bottomInset = fp.inset;
+      } else {
+        this.k = beside;
+      }
+    }
+    this.ox = (this.cssW - W * this.k) / 2;
+    this.floorY = this.cssH - Math.max(GROUND_DEPTH * this.k, this.bottomInset);
+    this.layoutMode = mode;
+  }
 
-  draw(world: World, extras: DrawExtras): void {
-    const { ctx, dpr } = this;
-    const mode = world.mode;
-    if (!this.sky) this.layout(mode);
+  /**
+   * Gradients and arena art are slow to rasterise on weak tablets, and they
+   * never move — draw them once into an offscreen canvas and blit it.
+   */
+  private background(mode: SlimeMode): HTMLCanvasElement {
+    const key = `${mode.id}:${this.canvas.width}x${this.canvas.height}:${this.bottomInset}`;
+    if (this.bg && this.bgKey === key) return this.bg;
+    if (this.layoutMode !== mode) this.layout(mode);
+    const bg = this.bg ?? document.createElement("canvas");
+    bg.width = this.canvas.width;
+    bg.height = this.canvas.height;
+    const ctx = bg.getContext("2d", { alpha: false })!;
+    const { dpr } = this;
     const W = mode.arena.width;
 
-    // --- screen-space background ---
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = this.sky!;
+    const sky = ctx.createLinearGradient(0, 0, 0, this.floorY);
+    sky.addColorStop(0, mode.theme.skyTop);
+    sky.addColorStop(1, mode.theme.skyBottom);
+    ctx.fillStyle = sky;
     ctx.fillRect(0, 0, this.cssW, this.floorY);
     ctx.fillStyle = mode.theme.ground;
     ctx.fillRect(0, this.floorY, this.cssW, this.cssH - this.floorY);
@@ -90,10 +123,30 @@ export class SlimeRenderer {
       ctx.fillRect(0, 0, this.ox, this.cssH);
       ctx.fillRect(this.ox + W * this.k, 0, this.ox + 1, this.cssH);
     }
+    ctx.setTransform(dpr * this.k, 0, 0, -dpr * this.k, dpr * this.ox, dpr * this.floorY);
+    mode.drawArena(ctx);
+
+    this.bg = bg;
+    this.bgKey = key;
+    return bg;
+  }
+
+  /** Canvas CSS pixels → world units. */
+  readonly toWorld = (px: number, py: number) => ({
+    x: (px - this.ox) / this.k,
+    y: (this.floorY - py) / this.k,
+  });
+
+  draw(world: World, extras: DrawExtras): void {
+    const { ctx, dpr } = this;
+    const mode = world.mode;
+
+    // --- static backdrop ---
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(this.background(mode), 0, 0);
 
     // --- world space (y-up) ---
     ctx.setTransform(dpr * this.k, 0, 0, -dpr * this.k, dpr * this.ox, dpr * this.floorY);
-    mode.drawArena(ctx);
 
     const ball = world.ball;
     const r = mode.ball.radius;
@@ -107,6 +160,15 @@ export class SlimeRenderer {
     for (const s of world.slimes) this.drawSlime(s, world);
 
     mode.drawBall(ctx, ball.x, ball.y, r, world.ballAngle);
+    // Carried ball: ring runs down until the auto-throw.
+    if (world.holder !== null && mode.aux?.maxHold) {
+      const left = Math.max(0, 1 - world.holdTime / mode.aux.maxHold);
+      ctx.strokeStyle = world.slimes[world.holder].char.color;
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(ball.x, ball.y, r + 7, Math.PI / 2, Math.PI / 2 + left * Math.PI * 2);
+      ctx.stroke();
+    }
     // Hold-ring while the ball waits to drop.
     const hold = world.holdRemaining();
     if (hold > 0) {
