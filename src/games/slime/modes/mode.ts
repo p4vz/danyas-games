@@ -17,7 +17,13 @@ export interface ScoreEvent {
  *  - "pop": tap to flick a ball that's on/near your head straight up.
  */
 export interface AuxAction {
-  kind: "grab" | "pop";
+  /**
+   * grab: hold to catch and carry, release to throw up.
+   * pop: tap to pop a ball on your head straight up.
+   * shot: tap to strike a ball beside you (or flick it over your head)
+   *   toward the stick direction — your attack direction by default.
+   */
+  kind: "grab" | "pop" | "shot";
   /** Button label. */
   label: string;
   /** Label while holding the ball (grab). */
@@ -26,6 +32,8 @@ export interface AuxAction {
   launchSpeed: number;
   /** Extra sideways speed at full stick deflection. */
   aimSpeed: number;
+  /** Shot: speed toward the aim direction. */
+  shotSpeed?: number;
   /** Grab: auto-throw after holding this long (s). */
   maxHold?: number;
   /** One-line explanation for the menu. */
@@ -103,6 +111,11 @@ export interface SlimeMode {
    * `side`'s point of view. Higher is better; roughly −4..+4.
    */
   evaluate(path: BallPath, side: Side, world: World): number;
+  /**
+   * Goal sports: the CPU drops back to defend (to `homeX`) instead of racing
+   * an opponent who'll clearly reach the ball first.
+   */
+  aiDefends?: boolean;
   /** Where to wait when there is nothing to hit. */
   homeX(world: World, side: Side): number;
 

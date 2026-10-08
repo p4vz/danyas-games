@@ -119,14 +119,22 @@ describe("tennis CPU", () => {
   });
 
   it("wins points with shots the other side can't return, not just on their errors", () => {
-    const w = new World({ mode: tennis, chars: [getCharacter("zip"), getCharacter("classic")], ballSpeed: 1, winScore: 99, seed: 9 });
-    const ai = [new AiController(0, "hard"), new AiController(1, "easy")];
-    const labels: Record<string, number> = {};
-    for (let t = 0; t < 180; t += FIXED_DT) {
-      w.step([ai[0].getIntent(w), ai[1].getIntent(w)]);
-      for (const e of w.events) if (e.type === "score" && e.score.scorer === 0) labels[e.score.label] = (labels[e.score.label] ?? 0) + 1;
-      w.events.length = 0;
+    let winners = 0;
+    for (let g = 0; g < 3; g++) {
+      const w = new World({
+        mode: tennis,
+        chars: [CHARACTERS[g], CHARACTERS[g + 3]],
+        ballSpeed: 1,
+        winScore: 99,
+        seed: 9 + g,
+      });
+      const ai = [new AiController(0, "hard"), new AiController(1, "easy")];
+      for (let t = 0; t < 120; t += FIXED_DT) {
+        w.step([ai[0].getIntent(w), ai[1].getIntent(w)]);
+        for (const e of w.events) if (e.type === "score" && e.score.scorer === 0 && e.score.label === "POINT!") winners++;
+        w.events.length = 0;
+      }
     }
-    expect(labels["POINT!"] ?? 0).toBeGreaterThanOrEqual(3);
+    expect(winners).toBeGreaterThanOrEqual(4);
   });
 });

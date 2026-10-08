@@ -16,7 +16,7 @@ import {
   type SlimePhysics,
   type Velocities,
 } from "./physics";
-import { other, type Intent, type Side } from "./types";
+import { attackDir, other, type Intent, type Side } from "./types";
 
 export type Phase = "ready" | "play" | "scored" | "over";
 
@@ -82,25 +82,55 @@ const CARRY_SPEED = 0.75;
 const FUMBLE_POP = 320;
 const FUMBLE_NUDGE = 140;
 
-/** Is the ball on / just above this slime's dome (within aux-button reach)? */
-export function inAuxReach(s: SlimeBody, ball: Ball, ballRadius: number): boolean {
+/**
+ * Can slime `s` reach the ball with its aux button: on / just above the dome,
+ * or for a shot anywhere close around it?
+ */
+export function inAuxReach(s: SlimeBody, ball: Ball, ballRadius: number, aux?: AuxAction): boolean {
   const R = s.char.radius;
-  return ball.y >= s.y + R * 0.25 && Math.hypot(ball.x - s.x, ball.y - s.y) < R + ballRadius + AUX_REACH;
+  const near = Math.hypot(ball.x - s.x, ball.y - s.y) < R + ballRadius + AUX_REACH;
+  return near && (aux?.kind === "shot" || ball.y >= s.y + R * 0.25);
 }
 
 /**
- * Set the ball up as thrown / popped by slime `s`: sat on top of the dome,
- * launched straight up and tilted by the stick (`moveX`), plus some of the
- * slime's own motion. Shared by the world and the AI's throw planning.
+ * Set the ball up as thrown / popped / shot by slime `s`. Pops and throws sit
+ * it on top of the dome and launch it straight up, tilted by the stick
+ * (`moveX`); a shot strikes it where it lies toward the stick direction (or
+ * flicks it over the dome if it's behind). Plus some of the slime's own
+ * motion. Shared by the world and the AI's planning.
  */
 export function auxLaunch(
-  s: Pick<SlimeBody, "x" | "y" | "vx" | "vy" | "char">,
+  s: Pick<SlimeBody, "side" | "x" | "y" | "vx" | "vy" | "char">,
   ball: Ball,
   ballRadius: number,
   moveX: number,
   aux: AuxAction,
 ): void {
   const R = s.char.radius;
+  if (aux.kind === "shot") {
+    const dir = Math.abs(moveX) > 0.3 ? Math.sign(moveX) : attackDir(s.side);
+    const speed = aux.shotSpeed ?? aux.aimSpeed;
+    if (Math.sign(ball.x - s.x) === dir) {
+      // On the shooting side: strike it where it lies, just clear of the dome.
+      const dx = ball.x - s.x;
+      const dy = Math.max(0, ball.y - s.y);
+      const d = Math.hypot(dx, dy) || 1;
+      const min = R + ballRadius + 1;
+      if (d < min) {
+        ball.x = s.x + (dx / d) * min;
+        ball.y = s.y + (dy / d) * min;
+      }
+      ball.vx = dir * speed + s.vx * 0.4;
+      ball.vy = aux.launchSpeed;
+      return;
+    }
+    // Behind us: hook it up over the dome and away.
+    ball.x = s.x;
+    ball.y = s.y + R + ballRadius + 1;
+    ball.vx = dir * speed * 0.5 + s.vx * 0.4;
+    ball.vy = aux.launchSpeed * 2;
+    return;
+  }
   const off = Math.max(-R * 0.5, Math.min(R * 0.5, ball.x - s.x));
   ball.x = s.x + off;
   ball.y = s.y + Math.sqrt((R + ballRadius + 1) ** 2 - off * off);
@@ -316,6 +346,8 @@ export class World {
   /** Aux button: grab / carry / throw, or pop. Only during live play. */
   private updateAux(intents: [Intent, Intent], aux: AuxAction): void {
     const dt = FIXED_DT;
+    const pops = this.popping;
+    pops.length = 0;
     for (const s of this.slimes) {
       const side = s.side;
       const pressed = intents[side].aux && this.phase === "play";
@@ -340,10 +372,22 @@ export class World {
           this.events.push({ type: "grab", side });
         }
       } else if (edge && ready && this.inAuxReach(s)) {
-        this.launch(s, intents[side], aux);
+        pops.push(s);
       }
     }
+    // Both popping the same ball on the same step: the nearer slime gets it
+    // (a coin flip on a dead heat), so neither side wins every tie.
+    if (pops.length === 2) {
+      const gap = (s: SlimeBody) => Math.hypot(this.ball.x - s.x, this.ball.y - s.y) - s.char.radius;
+      const d = gap(pops[0]) - gap(pops[1]);
+      if (d > 1e-6 || (Math.abs(d) <= 1e-6 && this.rng() < 0.5)) pops.reverse();
+      this.auxCooldown[pops[1].side] = AUX_COOLDOWN;
+    }
+    if (pops.length > 0) this.launch(pops[0], intents[pops[0].side], aux);
   }
+
+  /** Scratch: slimes popping / shooting the ball this step. */
+  private readonly popping: SlimeBody[] = [];
 
   /** How fast the ball plays right now: the setting × any rally speed-up. */
   get ballTimeScale(): number {
@@ -360,7 +404,7 @@ export class World {
 
   /** Can this slime reach the ball with its aux button right now? */
   inAuxReach(s: SlimeBody): boolean {
-    return inAuxReach(s, this.ball, this.mode.ball.radius);
+    return inAuxReach(s, this.ball, this.mode.ball.radius, this.mode.aux);
   }
 
   /** Throw / pop the ball straight up, tilted by the stick. */

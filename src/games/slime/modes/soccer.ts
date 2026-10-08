@@ -103,6 +103,7 @@ export const soccer: SlimeMode = {
     const mean = sum / Math.ceil(path.length / 8);
     return clamp(end * 0.8 + mean * 0.6, -2, 2);
   },
+  aiDefends: true,
   homeX(world: World, side: Side) {
     const goal = side === 0 ? GOAL_D * 0.6 : W - GOAL_D * 0.6;
     return goal + (world.ball.x - goal) * 0.45;

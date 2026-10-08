@@ -437,7 +437,7 @@ class SlimeSports implements Game {
       <div class="slime-modes">
         ${cards}
         <div class="slime-mode slime-mode--soon"><span class="slime-mode__name">More soon</span>
-          <span class="slime-mode__tag">Hockey · Tennis · Online</span></div>
+          <span class="slime-mode__tag">Online play</span></div>
       </div>
       <button class="btn btn--ghost" data-act="home">← All games</button>
     `,
@@ -643,6 +643,8 @@ function modeArt(id: string): string {
       <path d="M118 14 V40 M118 30 H100" fill="none" stroke="#ff5a1f" stroke-width="3"/>`,
     tennis: `<circle cx="66" cy="20" r="6" fill="#d9f24a" stroke="#fff" stroke-width="1.5"/>
       <rect x="59" y="44" width="3" height="12" fill="#fff"/><rect x="56" y="43" width="9" height="3" fill="#fff"/>`,
+    hockey: `<rect x="60" y="52" width="12" height="4" rx="1.5" fill="#111418"/>
+      <path d="M106 56 V42 H120" fill="none" stroke="#e0393e" stroke-width="3"/>`,
   };
   return `<svg viewBox="0 0 120 60" aria-hidden="true">
     <rect x="0" y="56" width="120" height="4" fill="#ffffff55"/>

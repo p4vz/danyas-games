@@ -15,7 +15,7 @@ import {
 import { CHARACTERS } from "./characters";
 import { bouncesLeft, isNetSport, type AuxAction } from "./modes/mode";
 import { BallPath, predictBall } from "./predict";
-import { attackDir, idleIntent, type Controller, type Intent, type Side } from "./types";
+import { attackDir, idleIntent, other, type Controller, type Intent, type Side } from "./types";
 import { auxLaunch, type World } from "./world";
 
 export type Difficulty = "easy" | "medium" | "hard";
@@ -47,6 +47,10 @@ interface AiProfile {
   usesAux: boolean;
   /** Random error on the throw's stick aim (−1..1 units). */
   throwNoise: number;
+  /** How often it looks for a pop / shot while the ball is in reach (s). */
+  popCheck: number;
+  /** Goal sports: drops back to defend when the opponent will clearly get there first. */
+  defends: boolean;
   /** Chance per plan to just play it safe with the first idea. */
   sloppiness: number;
 }
@@ -66,6 +70,8 @@ const PROFILES: Record<Difficulty, AiProfile> = {
     refine: false,
     usesAux: false,
     throwNoise: 0.3,
+    defends: false,
+    popCheck: 0.3,
     sloppiness: 0.5,
   },
   medium: {
@@ -82,6 +88,8 @@ const PROFILES: Record<Difficulty, AiProfile> = {
     refine: false,
     usesAux: true,
     throwNoise: 0.6,
+    defends: false,
+    popCheck: 0.18,
     sloppiness: 0.15,
   },
   hard: {
@@ -98,6 +106,8 @@ const PROFILES: Record<Difficulty, AiProfile> = {
     refine: true,
     usesAux: true,
     throwNoise: 0.02,
+    defends: true,
+    popCheck: 0.04,
     sloppiness: 0,
   },
 };
@@ -107,7 +117,13 @@ const OUTCOME_HORIZON = 1.7;
 /** Plan scores at or above this predict a score (see each mode's `evaluate`). */
 const SCORING = 2.5;
 /** Stick aims tried for a throw. */
-const THROW_AIMS = [-1, -0.6, -0.3, 0, 0.3, 0.6, 1];
+// (Straightest first: on a tie the first wins, and a left-first order would
+// favour one side of the court.)
+const THROW_AIMS = [0, -0.3, 0.3, -0.6, 0.6, -1, 1];
+/** A shot only has a direction: default (attack), left, right. */
+const SHOT_AIMS = [0, -1, 1];
+/** Defend instead of chasing when the opponent gets there this much sooner (s). */
+const DEFEND_MARGIN = 0.2;
 /** A pop must beat the planned hit by this much for the CPU to use it. */
 const POP_MARGIN = 0.3;
 /** Spacing of candidate shooting spots (world units). */
@@ -125,6 +141,9 @@ function travelTime(d: number, s: SlimeBody, env: SlimePhysics): number {
   return d / v + v / a;
 }
 
+/** The slime state a throw / pop / shot is planned from. */
+type ThrowSlime = Pick<SlimeBody, "side" | "x" | "y" | "vx" | "vy" | "char">;
+
 interface RolloutResult {
   score: number;
   /** When and where the first touch happens. */
@@ -137,6 +156,8 @@ interface Plan {
   /** What the plan is, and how good the AI thinks the result will be. */
   kind: "ground" | "jump" | "chase" | "home" | "leave";
   score: number;
+  /** When the planned hit happens (s from now; 0 for non-hits). */
+  t: number;
   targetX: number;
   /** Absolute world time to take off, or null for no jump. */
   jumpAt: number | null;
@@ -184,7 +205,7 @@ export class AiController implements Controller {
   private spotNext = 0;
   private spotEnd = 0;
   private nextThrowCheck = 0;
-  private readonly throwSlime = { x: 0, y: 0, vx: 0, vy: 0, char: CHARACTERS[0] };
+  private readonly throwSlime: ThrowSlime;
   // Unstick: notice when we're jammed (against a wall or the other slime, ball
   // going nowhere) and back off for a moment instead of pushing forever.
   private stuckFor = 0;
@@ -199,6 +220,7 @@ export class AiController implements Controller {
   ) {
     this.p = PROFILES[difficulty];
     this.sim = { side, char: CHARACTERS[0], x: 0, y: 0, vx: 0, vy: 0, grounded: true, onSlime: false, minX: 0, maxX: 0 };
+    this.throwSlime = { side, x: 0, y: 0, vx: 0, vy: 0, char: CHARACTERS[0] };
   }
 
   /** Current plan, for debugging / tuning tools. */
@@ -243,23 +265,24 @@ export class AiController implements Controller {
       intent.aux = true;
     }
 
-    // Pop sports: when the ball is on our head and a pop (aimed with the
-    // stick) beats the hit we had lined up, tap the button instead.
+    // Pop / shot sports: when the ball is in reach and a pop or shot (aimed
+    // with the stick) beats the hit we had lined up, tap the button instead.
     if (
-      aux?.kind === "pop" &&
+      (aux?.kind === "pop" || aux?.kind === "shot") &&
       this.p.usesAux &&
       plan.kind !== "leave" &&
       world.phase === "play" &&
       world.time >= this.nextThrowCheck &&
       world.inAuxReach(s)
     ) {
-      this.nextThrowCheck = world.time + this.p.reaction * 0.5;
-      const best = this.bestThrow(world, aux, s, world.ball.x);
+      this.nextThrowCheck = world.time + this.p.popCheck;
+      const best = this.bestThrow(world, aux, s, world.ball.x, world.ball.y);
       if (best.score > plan.score + POP_MARGIN) {
         intent.aux = true;
         intent.targetX = null;
-        const noisy = best.aim + (world.rng() - 0.5) * 2 * this.p.throwNoise;
-        intent.moveX = Math.max(-1, Math.min(1, noisy));
+        // (A shot's direction is all-or-nothing: no aim wobble there.)
+        const wobble = aux.kind === "shot" ? 0 : (world.rng() - 0.5) * 2 * this.p.throwNoise;
+        intent.moveX = Math.max(-1, Math.min(1, best.aim + wobble));
         return intent;
       }
     }
@@ -334,16 +357,17 @@ export class AiController implements Controller {
   private bestThrow(
     world: World,
     aux: AuxAction,
-    t: { x: number; y: number; vx: number; vy: number; char: SlimeBody["char"] },
+    t: ThrowSlime,
     ballX = t.x,
+    ballY = 0,
   ): { aim: number; score: number } {
     const spec = world.mode.ball;
     const b = this.tmpBall;
     let aim = 0;
     let score = -Infinity;
-    for (const a of THROW_AIMS) {
+    for (const a of aux.kind === "shot" ? SHOT_AIMS : THROW_AIMS) {
       b.x = ballX;
-      b.y = 0;
+      b.y = ballY;
       auxLaunch(t, b, spec.radius, a, aux);
       predictBall(b, spec, world.mode.arena, world.nextTouchTimeScale, OUTCOME_HORIZON, this.outcome, 0, 1, FIXED_DT * 2);
       const sc = world.mode.evaluate(this.outcome, this.side, world);
@@ -527,6 +551,7 @@ export class AiController implements Controller {
       best = {
         kind: takeoff === null ? "ground" : "jump",
         score,
+        t: res.t,
         targetX,
         jumpAt: takeoff === null ? null : world.time + takeoff,
         contactX: res.x,
@@ -550,8 +575,20 @@ export class AiController implements Controller {
     if (isNetSport(mode) && world.phase === "play" && world.rally.lastTouch?.side === this.side) {
       const leave = mode.evaluate(path, this.side, world);
       if (leave > 0 && (!best || leave >= (best as Plan).score)) {
-        return { kind: "leave", score: leave, targetX: this.dodgeX(world, s), jumpAt: null, contactX: 0, contactY: 0 };
+        return { kind: "leave", score: leave, t: 0, targetX: this.dodgeX(world, s), jumpAt: null, contactX: 0, contactY: 0 };
       }
+    }
+
+    // Goal sports: if they'll clearly get there first, don't leave the goal
+    // open chasing it — drop back and defend.
+    if (
+      best &&
+      p.defends &&
+      mode.aiDefends &&
+      world.phase === "play" &&
+      (best as Plan).t > this.opponentReach(world) + DEFEND_MARGIN
+    ) {
+      return { kind: "home", score: 0, t: 0, targetX: mode.homeX(world, this.side), jumpAt: null, contactX: 0, contactY: 0 };
     }
 
     if (best) {
@@ -566,11 +603,29 @@ export class AiController implements Controller {
       if (path.y[i] < reach && path.x[i] >= s.minX - R && path.x[i] <= s.maxX + R) {
         const sx = path.x[i] - dir * reach * 0.3;
         const targetX = Math.max(s.minX, Math.min(s.maxX, sx));
-        return { kind: "chase", score: 0, targetX, jumpAt: null, contactX: 0, contactY: 0 };
+        return { kind: "chase", score: 0, t: 0, targetX, jumpAt: null, contactX: 0, contactY: 0 };
       }
     }
     const targetX = mode.homeX(world, this.side);
-    return { kind: "home", score: 0, targetX, jumpAt: null, contactX: 0, contactY: 0 };
+    return { kind: "home", score: 0, t: 0, targetX, jumpAt: null, contactX: 0, contactY: 0 };
+  }
+
+  /** Rough earliest time the opponent could get a dome on the predicted ball. */
+  private opponentReach(world: World): number {
+    const o = world.slimes[other(this.side)];
+    const path = this.path;
+    const reach = o.char.radius + world.mode.ball.radius;
+    const v0 = o.char.jump;
+    const high = reach + ((v0 * v0) / (2 * world.physics.gravity)) * 0.8;
+    for (let i = 0; i < path.length; i += 4) {
+      if (path.y[i] > high) continue;
+      const t = path.t[i];
+      // Where their current momentum carries them (matters on ice).
+      const ox = o.x + o.vx * Math.min(t, 0.3);
+      const d = Math.max(0, Math.abs(path.x[i] - ox) - reach * 0.6);
+      if (travelTime(d, o, world.physics) <= t) return t;
+    }
+    return Infinity;
   }
 
   /** A spot on our side that keeps the dome clear of the ball's path, near home. */
