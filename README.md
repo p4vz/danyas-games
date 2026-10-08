@@ -173,6 +173,9 @@ saved on the device; *Reset* restores the defaults.
 
 **Aux button**, per sport (`SlimeMode.aux`):
 
+- (Basketball's hoop sits at a height every character can contest: jumping
+  from in front of the rim, even Tank reaches a shot before it drops in, while
+  the net itself is a ceiling, so there's no blocking from underneath.)
 - Basketball, **GRAB**: hold to catch and carry the ball (at 75% speed), let go
   to toss it straight up; tilting the stick lobs it a little, enough for a
   lay-up, not a long-range auto-shot. Bumping the carrier (or touching the ball)
