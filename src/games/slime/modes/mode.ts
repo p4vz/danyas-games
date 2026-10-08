@@ -87,6 +87,8 @@ export interface SlimeMode {
   speedUp?: { perTouch: number; max: number };
   /** Points to win for Short / Standard / Long matches. */
   winScores: [number, number, number];
+  /** If set, matches can be played on the clock instead: seconds for Short / Standard / Long. */
+  timeLimits?: [number, number, number];
 
   /** Allowed x range for a slime's centre on this side. */
   slimeRange(side: Side, radius: number): [number, number];
@@ -123,7 +125,7 @@ export interface SlimeMode {
   /** Static arena art. Rendered once per layout and cached, so it must not animate. */
   drawArena(ctx: CanvasRenderingContext2D): void;
   /** Foreground pieces drawn over the ball/slimes (nets, goal mesh). */
-  drawForeground?(ctx: CanvasRenderingContext2D): void;
+  drawForeground?(ctx: CanvasRenderingContext2D, world: World): void;
   drawBall(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, angle: number): void;
 }
 

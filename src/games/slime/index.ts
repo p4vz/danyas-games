@@ -29,6 +29,8 @@ interface Settings {
   difficulty: Difficulty;
   ballSpeed: number;
   length: 0 | 1 | 2;
+  /** Sports with a clock option: play timed matches instead of first-to-N. */
+  clock: boolean;
   showPath: boolean;
 }
 
@@ -39,6 +41,7 @@ const DEFAULTS: Settings = {
   difficulty: "medium",
   ballSpeed: 1,
   length: 0,
+  clock: false,
   showPath: false,
 };
 
@@ -74,7 +77,8 @@ class SlimeSports implements Game {
   private editor: ControlsEditor | null = null;
   private accumulator = 0;
   private state: State = "menu";
-  private notice: { text: string; until: number } | null = null;
+  private notice: { text: string; sub?: string; until: number } | null = null;
+  private clockText = "";
 
   mount(container: HTMLElement): void {
     this.root = document.createElement("div");
@@ -144,6 +148,7 @@ class SlimeSports implements Game {
       chars,
       ballSpeed: st.ballSpeed,
       winScore: mode.winScores[st.length],
+      timeLimit: st.clock && mode.timeLimits ? mode.timeLimits[st.length] : undefined,
       seed: (Math.random() * 2 ** 32) >>> 0,
     });
     const humans: [boolean, boolean] = [true, st.players === 2];
@@ -186,6 +191,7 @@ class SlimeSports implements Game {
     if (steps === MAX_STEPS) this.accumulator = 0;
     this.syncAuxLabels(world);
     this.drainEvents(world);
+    this.updateClock(world);
     this.draw();
     if (world.phase === "over" && this.state === "playing") this.onMatchOver(world);
   }
@@ -203,6 +209,9 @@ class SlimeSports implements Game {
       else if (ev.type === "steal") this.sfx.hit(0.6);
       else if (ev.type === "reserve") {
         this.notice = { text: "Re-serve", until: world.time + 1.2 };
+      } else if (ev.type === "whistle") {
+        this.sfx.score();
+        if (ev.golden) this.notice = { text: "GOLDEN GOAL", sub: "Next goal wins!", until: world.time + 2.2 };
       }
     }
     world.events.length = 0;
@@ -279,12 +288,13 @@ class SlimeSports implements Game {
       };
     }
     if (this.notice && world.time < this.notice.until) {
-      return { text: this.notice.text, color: "#ffffff", alpha: Math.min(1, (this.notice.until - world.time) * 2) };
+      const { text, sub } = this.notice;
+      return { text, sub, color: "#ffffff", alpha: Math.min(1, (this.notice.until - world.time) * 2) };
     }
     if (world.phase === "ready" && world.scores[0] + world.scores[1] === 0 && world.time < 1.2) {
       return {
         text: world.mode.name,
-        sub: `First to ${world.winScore}`,
+        sub: world.timeLimit !== null ? `${formatClock(world.timeLimit)} on the clock` : `First to ${world.winScore}`,
         color: world.mode.accent,
         alpha: Math.min(1, (1.2 - world.time) * 3),
       };
@@ -304,7 +314,23 @@ class SlimeSports implements Game {
     this.scorePill.innerHTML = `
       <span style="color:${w.slimes[0].char.color}">${w.scores[0]}</span>
       <span class="slime-score__sep">:</span>
-      <span style="color:${w.slimes[1].char.color}">${w.scores[1]}</span>`;
+      <span style="color:${w.slimes[1].char.color}">${w.scores[1]}</span>
+      ${w.clock !== null ? `<span class="slime-clock" data-clock></span>` : ""}`;
+    this.clockText = "";
+    this.updateClock(w);
+  }
+
+  /** Timed matches: the clock in the score pill (only touches the DOM when it changes). */
+  private updateClock(w: World): void {
+    if (w.clock === null) return;
+    const text = w.goldenGoal ? "GOLDEN GOAL" : formatClock(w.clock);
+    if (text === this.clockText) return;
+    this.clockText = text;
+    const el = this.scorePill.querySelector<HTMLElement>("[data-clock]");
+    if (el) {
+      el.textContent = text;
+      el.classList.toggle("slime-clock--hot", w.goldenGoal || w.clock <= 10);
+    }
   }
 
   private onMatchOver(world: World): void {
@@ -459,6 +485,7 @@ class SlimeSports implements Game {
     const mode = getMode(st.mode);
     this.clearCanvas(mode);
     const vsCpu = st.players === 1;
+    const timed = st.clock && mode.timeLimits !== undefined;
 
     const seg = (name: string, options: { label: string; value: string }[], current: string) =>
       `<div class="seg" data-seg="${name}">${options
@@ -506,11 +533,29 @@ class SlimeSports implements Game {
             String(st.ballSpeed),
           )}
         </div>
+        ${
+          mode.timeLimits
+            ? `<div class="slime-setup__row">
+          <span class="slime-setup__label">Win by</span>
+          ${seg(
+            "clock",
+            [
+              { label: "Goals", value: "0" },
+              { label: "Clock", value: "1" },
+            ],
+            st.clock ? "1" : "0",
+          )}
+        </div>`
+            : ""
+        }
         <div class="slime-setup__row">
           <span class="slime-setup__label">Match</span>
           ${seg(
             "length",
-            LENGTHS.map((l, i) => ({ label: `${l} · ${mode.winScores[i]}`, value: String(i) })),
+            LENGTHS.map((l, i) => ({
+              label: `${l} · ${timed ? formatClock(mode.timeLimits![i]) : mode.winScores[i]}`,
+              value: String(i),
+            })),
             String(st.length),
           )}
         </div>
@@ -554,6 +599,9 @@ class SlimeSports implements Game {
             break;
           case "length":
             st.length = Number(v) as 0 | 1 | 2;
+            break;
+          case "clock":
+            st.clock = v === "1";
             break;
           case "showPath":
             st.showPath = v === "1";
@@ -631,6 +679,12 @@ function slimeIcon(c: SlimeCharacter, side: Side): string {
     <circle cx="${ex}" cy="${ey}" r="${er}" fill="#fff"/>
     <circle cx="${ex + (side === 0 ? 1 : -1) * er * 0.35}" cy="${ey}" r="${er * 0.5}" fill="#111"/>
   </svg>`;
+}
+
+/** 75 → "1:15". */
+function formatClock(seconds: number): string {
+  const s = Math.ceil(seconds);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
 function modeArt(id: string): string {

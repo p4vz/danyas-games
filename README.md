@@ -28,7 +28,7 @@ src/
 └── games/
     ├── registry.ts      # single source of truth for the collection
     ├── geometry-beat/   # first game (Geometry Dash clone, beat-synced)
-    └── slime/           # Slime Sports: volleyball, soccer, basketball
+    └── slime/           # Slime Sports: volleyball, soccer, basketball, tennis, hockey
 ```
 
 ### Adding a game
@@ -115,8 +115,26 @@ beat-driven engine; saved levels are stored in `localStorage` and appear under
 
 ## Slime Sports — how it works
 
-A remake of the old Slime Volleyball / Soccer / Basketball flash games, built
-to grow more sports and online play later.
+A remake of the old Slime Volleyball / Soccer / Basketball flash games, plus
+Tennis and Hockey, built to grow more sports and online play later.
+
+**The sports**
+
+- **Volleyball**: don't let it land on your side; three touches max.
+- **Soccer**: score in their goal. No goal-hanging: park in your own goal for
+  4 s and they get a goal (a countdown ring shows over your slime first).
+- **Basketball**: through their hoop; shots from your own half count 3.
+- **Tennis**: low net, small fast ball, one bounce allowed per side. Your own
+  shot may drop once on your side and be played again (three touches in a
+  row max); two bounces on a side lose the point. The ball speeds up a little
+  with every touch (Pong-style, up to ×1.8; a trail shows the heat), so long
+  rallies come to a head.
+- **Hockey**: ice (slimes slide: start and stop early), a sliding puck,
+  face-offs at centre ice, and goals the slimes can't skate into.
+
+Soccer and hockey can also be played **on the clock** (1, 2 or 4 minutes of
+live play; the clock stops between goals). Most goals wins; if it's level at
+the whistle, it's golden goal.
 
 ```
 src/games/slime/
@@ -181,8 +199,12 @@ saved on the device; *Reset* restores the defaults.
   lay-up, not a long-range auto-shot. Bumping the carrier (or touching the ball)
   knocks it loose, it auto-throws after 2.5 s, and you can't score while
   carrying.
-- Volleyball, **SET**, and soccer, **FLICK**: tap to pop a ball off your head
-  straight up.
+- Volleyball, **SET**, soccer, **FLICK**, and tennis, **LOB**: tap to pop a
+  ball off your head straight up; tilt the stick to aim it.
+- Hockey, **SLAP**: tap with the puck next to you to fire it along the ice at
+  their goal (tilt the stick to shoot the other way); a puck behind you gets
+  hooked up over your head. If both players press on the same frame, the one
+  nearer the ball gets it.
 
 Keyboard: A/D move, W jump, S aux for the left player; arrows and ↓ for the
 right (either set in 1-player).
@@ -207,6 +229,15 @@ slower, so hits feel identical at any setting.
 If it is jammed against a wall or the other slime with the ball going nowhere,
 it backs off, or jumps through the ball to dig it out of a corner.
 
+Where bounces are allowed (tennis) it also tries playing the ball after the
+bounce and swinging through it, and it plans around the bounce limits. In net
+sports it leaves its own good shot alone rather than wasting a touch on it.
+With SET / FLICK / LOB / SLAP, Medium and Hard rate a pop or shot in every
+aim with the game's own launch maths whenever the ball is in reach, and use
+it when it beats the hit they had lined up (tennis LOB rescues balls too low
+to hit back over the net). In soccer and hockey Hard drops back to guard its
+goal when you'll clearly get to the ball first, while Medium keeps chasing.
+
 In basketball, Medium and Hard also use **GRAB**. With the ball on their head
 and no scoring hit lined up, they catch it and look for a shooting spot by
 trying throws from spots across their attacking half with the game's own
@@ -230,9 +261,13 @@ to `modes/index.ts`. A mode provides:
   (touches per side, consecutive touches, last touch, floor bounces per half,
   and a mode-specific `data` bag), so "one bounce per side" (tennis) or "three
   touches max" are a few lines;
-- AI hooks: `evaluate` (rate a predicted ball path) and `homeX`;
-- art: `drawArena` (static, rendered once and cached), `drawForeground`,
-  `drawBall`.
+- `bouncesAllowed` (floor bounces per side before you must play it),
+  `floorEndsRally` (volleyball), `speedUp` (ball gets faster per touch),
+  `timeLimits` (offer timed matches), and `aux` (`grab`, `pop` or `shot`);
+- AI hooks: `evaluate` (rate a predicted ball path), `homeX`, and `aiDefends`
+  (drop back rather than race an opponent who'll get there first);
+- art: `drawArena` (static, rendered once and cached), `drawForeground`
+  (per frame, gets the world: nets, warnings), `drawBall`.
 
 **Multiplayer-ready**: the world only consumes per-side `Intent`s and is
 deterministic for a seed + input stream (seeded PRNG, fixed timestep). It has no

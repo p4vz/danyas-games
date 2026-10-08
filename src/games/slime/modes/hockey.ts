@@ -49,6 +49,7 @@ export const hockey: SlimeMode = {
   slimePhysics: { traction: 0.3, airControl: 0.5 },
   theme: { skyTop: "#14202e", skyBottom: "#33506b", ground: "#e9f5ff", groundLine: "#a9cde8" },
   winScores: [3, 5, 9],
+  timeLimits: [60, 120, 240],
   aux: {
     kind: "shot",
     label: "SLAP",

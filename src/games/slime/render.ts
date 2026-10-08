@@ -191,7 +191,7 @@ export class SlimeRenderer {
       ctx.arc(ball.x, ball.y, r + 8, Math.PI / 2, Math.PI / 2 + (hold / READY_TIME) * Math.PI * 2);
       ctx.stroke();
     }
-    mode.drawForeground?.(ctx);
+    mode.drawForeground?.(ctx, world);
 
     // Finger targets.
     for (let i = 0; i < extras.fingers.length; i++) {

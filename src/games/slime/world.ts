@@ -27,7 +27,9 @@ export type WorldEvent =
   | { type: "grab"; side: Side }
   | { type: "launch"; side: Side }
   | { type: "steal"; side: Side }
-  | { type: "reserve" };
+  | { type: "reserve" }
+  /** Clock ran out: `golden` = scores level, next goal wins. */
+  | { type: "whistle"; golden: boolean };
 
 export interface MatchConfig {
   mode: SlimeMode;
@@ -35,6 +37,8 @@ export interface MatchConfig {
   /** Ball time-scale: 1 = normal, 1.5 = turbo. */
   ballSpeed: number;
   winScore: number;
+  /** Play on the clock instead: seconds of live play, most points wins (golden goal on a tie). */
+  timeLimit?: number;
   seed: number;
 }
 
@@ -162,6 +166,8 @@ export class World {
   /** The match's ball-speed setting (see `ballTimeScale` for the live value). */
   readonly ballSpeed: number;
   readonly winScore: number;
+  /** Seconds of live play the match lasts (null = first to `winScore`). */
+  readonly timeLimit: number | null;
   readonly rng: () => number;
 
   time = 0;
@@ -172,6 +178,10 @@ export class World {
   winner: Side | null = null;
   lastScore: ScoreEvent | null = null;
   rally: RallyState = World.freshRally(null);
+  /** Timed matches: live-play seconds left (stops between points). */
+  clock: number | null = null;
+  /** Timed match level at the whistle: the next point wins. */
+  goldenGoal = false;
   /** Who is carrying the ball (grab sports), and for how long. */
   holder: Side | null = null;
   holdTime = 0;
@@ -202,6 +212,8 @@ export class World {
     this.physics = { ...DEFAULT_SLIME_PHYSICS, ...cfg.mode.slimePhysics };
     this.ballSpeed = cfg.ballSpeed;
     this.winScore = cfg.winScore;
+    this.timeLimit = cfg.timeLimit ?? null;
+    this.clock = this.timeLimit;
     this.rng = mulberry32(cfg.seed);
     this.slimes = [this.makeSlime(0, cfg.chars[0]), this.makeSlime(1, cfg.chars[1])];
     this.server = this.mode.nextServer(null);
@@ -318,6 +330,13 @@ export class World {
       if (ev) {
         this.award(ev);
         return;
+      }
+      if (this.clock !== null && !this.goldenGoal) {
+        this.clock = Math.max(0, this.clock - dt);
+        if (this.clock === 0) {
+          this.fullTime();
+          return;
+        }
       }
       // Re-serve a ball that's stuck: parked on a crossbar / rim / net top, or
       // wedged against a wall by slimes. A loose ball lying on open floor is
@@ -487,6 +506,20 @@ export class World {
     this.phase = "scored";
     this.phaseTime = 0;
     this.events.push({ type: "score", score: ev });
-    if (this.scores[ev.scorer] >= this.winScore) this.winner = ev.scorer;
+    if (this.timeLimit !== null ? this.goldenGoal : this.scores[ev.scorer] >= this.winScore) this.winner = ev.scorer;
+  }
+
+  /** The clock ran out mid-rally: the leader wins, or it's golden goal. */
+  private fullTime(): void {
+    const [a, b] = this.scores;
+    if (a === b) {
+      this.goldenGoal = true;
+      this.events.push({ type: "whistle", golden: true });
+      return; // play on
+    }
+    this.winner = a > b ? 0 : 1;
+    this.phase = "over";
+    this.phaseTime = 0;
+    this.events.push({ type: "whistle", golden: false });
   }
 }

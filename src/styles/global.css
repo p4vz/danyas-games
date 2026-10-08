@@ -683,6 +683,18 @@ body {
   margin: 0 4px;
 }
 
+.slime-clock {
+  margin-left: 10px;
+  padding-left: 10px;
+  border-left: 1px solid #ffffff33;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+
+.slime-clock--hot {
+  color: #ffcf4a;
+}
+
 .slime .game-topbar.hidden {
   display: none;
 }
