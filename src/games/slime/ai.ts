@@ -13,7 +13,7 @@ import {
   type Velocities,
 } from "./physics";
 import { CHARACTERS } from "./characters";
-import type { AuxAction } from "./modes/mode";
+import { bouncesLeft, isNetSport, type AuxAction } from "./modes/mode";
 import { BallPath, predictBall } from "./predict";
 import { attackDir, idleIntent, type Controller, type Intent, type Side } from "./types";
 import { auxLaunch, type World } from "./world";
@@ -43,8 +43,8 @@ interface AiProfile {
   timingNoise: number;
   /** Polish the chosen plan with small position / timing nudges. */
   refine: boolean;
-  /** Uses the GRAB button (catch, carry to a shooting spot, throw). */
-  grabs: boolean;
+  /** Uses the aux button: GRAB (catch, carry to a shooting spot, throw), or a pop when it beats the hit. */
+  usesAux: boolean;
   /** Random error on the throw's stick aim (−1..1 units). */
   throwNoise: number;
   /** Chance per plan to just play it safe with the first idea. */
@@ -64,7 +64,7 @@ const PROFILES: Record<Difficulty, AiProfile> = {
     jumpOptions: 1,
     timingNoise: 0.05,
     refine: false,
-    grabs: false,
+    usesAux: false,
     throwNoise: 0.3,
     sloppiness: 0.5,
   },
@@ -80,7 +80,7 @@ const PROFILES: Record<Difficulty, AiProfile> = {
     jumpOptions: 2,
     timingNoise: 0.02,
     refine: false,
-    grabs: true,
+    usesAux: true,
     throwNoise: 0.6,
     sloppiness: 0.15,
   },
@@ -96,7 +96,7 @@ const PROFILES: Record<Difficulty, AiProfile> = {
     jumpOptions: 3,
     timingNoise: 0,
     refine: true,
-    grabs: true,
+    usesAux: true,
     throwNoise: 0.02,
     sloppiness: 0,
   },
@@ -108,8 +108,12 @@ const OUTCOME_HORIZON = 1.7;
 const SCORING = 2.5;
 /** Stick aims tried for a throw. */
 const THROW_AIMS = [-1, -0.6, -0.3, 0, 0.3, 0.6, 1];
+/** A pop must beat the planned hit by this much for the CPU to use it. */
+const POP_MARGIN = 0.3;
 /** Spacing of candidate shooting spots (world units). */
 const SPOT_STEP = 45;
+/** How far past the contact point a "swing through" plan aims (world units). */
+const SWING_THROUGH = 90;
 /** Shooting spots rated per AI call while carrying (spreads the CPU cost over frames). */
 const SPOTS_PER_CALL = 3;
 
@@ -131,7 +135,7 @@ interface RolloutResult {
 
 interface Plan {
   /** What the plan is, and how good the AI thinks the result will be. */
-  kind: "ground" | "jump" | "chase" | "home";
+  kind: "ground" | "jump" | "chase" | "home" | "leave";
   score: number;
   targetX: number;
   /** Absolute world time to take off, or null for no jump. */
@@ -169,6 +173,8 @@ export class AiController implements Controller {
   private readonly sim: SlimeBody;
   private readonly simIntent: Intent = idleIntent();
   private readonly res: RolloutResult = { score: 0, t: 0, x: 0, y: 0 };
+  /** First path sample at which the rally is over for us (too many bounces). */
+  private rallyEnd = 0;
   private plan: Plan | null = null;
   private nextPlan = 0;
   private readonly intent: Intent = idleIntent();
@@ -214,7 +220,7 @@ export class AiController implements Controller {
     }
 
     const aux = world.mode.aux;
-    const grabbing = aux?.kind === "grab" && this.p.grabs;
+    const grabbing = aux?.kind === "grab" && this.p.usesAux;
     if (grabbing && world.holder === this.side) return this.carry(world, s, aux, intent);
     this.shotX = null;
     if (world.holder !== null && world.holder !== this.side) {
@@ -237,19 +243,43 @@ export class AiController implements Controller {
       intent.aux = true;
     }
 
+    // Pop sports: when the ball is on our head and a pop (aimed with the
+    // stick) beats the hit we had lined up, tap the button instead.
+    if (
+      aux?.kind === "pop" &&
+      this.p.usesAux &&
+      plan.kind !== "leave" &&
+      world.phase === "play" &&
+      world.time >= this.nextThrowCheck &&
+      world.inAuxReach(s)
+    ) {
+      this.nextThrowCheck = world.time + this.p.reaction * 0.5;
+      const best = this.bestThrow(world, aux, s, world.ball.x);
+      if (best.score > plan.score + POP_MARGIN) {
+        intent.aux = true;
+        intent.targetX = null;
+        const noisy = best.aim + (world.rng() - 0.5) * 2 * this.p.throwNoise;
+        intent.moveX = Math.max(-1, Math.min(1, noisy));
+        return intent;
+      }
+    }
+
     if (plan.jumpAt !== null && world.time >= plan.jumpAt - 1e-9) {
       if (s.grounded) intent.jump = true;
       plan.jumpAt = null;
     }
 
     // Hop over a low ball that sits between us and where we need to be,
-    // rather than bulldozing it the wrong way.
+    // rather than bulldozing it the wrong way. (Not in net sports: there a
+    // low ball is one to play, and jumping into it from below pops it
+    // straight up into our own court.)
     const b = world.ball;
     const r = world.mode.ball.radius;
     const dx = plan.targetX - s.x;
     const ahead = (b.x - s.x) * Math.sign(dx);
     if (
       world.phase === "play" &&
+      !isNetSport(world.mode) &&
       s.grounded &&
       Math.abs(dx) > s.char.radius &&
       ahead > 0 &&
@@ -300,21 +330,22 @@ export class AiController implements Controller {
     return intent;
   }
 
-  /** Best stick aim for throwing from slime state `t`, rated by the mode. */
+  /** Best stick aim for throwing / popping from slime state `t`, rated by the mode. */
   private bestThrow(
     world: World,
     aux: AuxAction,
     t: { x: number; y: number; vx: number; vy: number; char: SlimeBody["char"] },
+    ballX = t.x,
   ): { aim: number; score: number } {
     const spec = world.mode.ball;
     const b = this.tmpBall;
     let aim = 0;
     let score = -Infinity;
     for (const a of THROW_AIMS) {
-      b.x = t.x;
+      b.x = ballX;
       b.y = 0;
       auxLaunch(t, b, spec.radius, a, aux);
-      predictBall(b, spec, world.mode.arena, world.ballSpeed, OUTCOME_HORIZON, this.outcome, 0, 1, FIXED_DT * 2);
+      predictBall(b, spec, world.mode.arena, world.nextTouchTimeScale, OUTCOME_HORIZON, this.outcome, 0, 1, FIXED_DT * 2);
       const sc = world.mode.evaluate(this.outcome, this.side, world);
       if (sc > score) {
         score = sc;
@@ -380,7 +411,7 @@ export class AiController implements Controller {
       return true;
     }
     // Volleyball can't afford to back off: the ball would just land.
-    if (world.phase !== "play" || world.mode.floorEndsRally) {
+    if (world.phase !== "play" || isNetSport(world.mode)) {
       this.stuckFor = 0;
       return false;
     }
@@ -417,8 +448,9 @@ export class AiController implements Controller {
     const p = this.p;
 
     const hold = world.holdRemaining();
-    predictBall(world.ball, spec, mode.arena, world.ballSpeed, p.horizon, this.path, hold, 1);
+    predictBall(world.ball, spec, mode.arena, world.ballTimeScale, p.horizon, this.path, hold, 1);
     const path = this.path;
+    this.rallyEnd = this.findRallyEnd(world);
 
     const v0 = s.char.jump;
     const g = world.physics.gravity;
@@ -428,6 +460,7 @@ export class AiController implements Controller {
     //    and a few jump hits that our speed / accel / jump arc can make.
     const cands = this.cands;
     cands.length = 0;
+    const bounceSports = mode.bouncesAllowed !== undefined;
     for (const f0 of p.offsets) {
       const f = f0 + (rng() - 0.5) * 2 * p.aimNoise;
       const ox = dir * f * reach; // ball is this far *ahead* of slime centre
@@ -438,8 +471,13 @@ export class AiController implements Controller {
       // (waiting for the ball to drop can give a better shooting angle).
       let jumpsLeft = p.jumps ? p.jumpOptions : 0;
       let nextJumpT = 0;
-      for (let i = 0; i < path.length && !(groundDone && jumpsLeft === 0); i += 2) {
-        if (mode.floorEndsRally && path.floor[i]) break;
+      for (let i = 0; i < this.rallyEnd && !(groundDone && jumpsLeft === 0); i += 2) {
+        // Where a bounce is allowed (tennis), also try playing it after the
+        // bounce rather than only on the way down — usually the better shot.
+        if (bounceSports && (path.floor[i] || path.floor[i + 1])) {
+          groundDone = false;
+          jumpsLeft = Math.max(jumpsLeft, p.jumps ? 1 : 0);
+        }
         const bx = path.x[i];
         const by = path.y[i];
         const t = path.t[i];
@@ -460,6 +498,9 @@ export class AiController implements Controller {
           if (tMove <= t) {
             groundDone = true;
             this.addCandidate(sx, null);
+            // Swing through: aim past the spot so we're still moving when we
+            // meet the ball — that's where a stopped dome lacks power.
+            if (bounceSports) this.addCandidate(Math.max(s.minX, Math.min(s.maxX, sx + dir * SWING_THROUGH)), null);
           }
         } else if (jumpsLeft > 0 && t >= nextJumpT && base > 1 && base < apex * 0.97) {
           const tUp = (v0 - Math.sqrt(v0 * v0 - 2 * g * base)) / g;
@@ -504,6 +545,15 @@ export class AiController implements Controller {
       }
     }
 
+    // Net sports: our own shot that's already doing the job is better left
+    // alone than touched again (a wasted touch, or a double hit).
+    if (isNetSport(mode) && world.phase === "play" && world.rally.lastTouch?.side === this.side) {
+      const leave = mode.evaluate(path, this.side, world);
+      if (leave > 0 && (!best || leave >= (best as Plan).score)) {
+        return { kind: "leave", score: leave, targetX: this.dodgeX(world, s), jumpAt: null, contactX: 0, contactY: 0 };
+      }
+    }
+
     if (best) {
       const plan: Plan = best;
       plan.targetX += (rng() - 0.5) * 2 * p.posNoise;
@@ -521,6 +571,42 @@ export class AiController implements Controller {
     }
     const targetX = mode.homeX(world, this.side);
     return { kind: "home", score: 0, targetX, jumpAt: null, contactX: 0, contactY: 0 };
+  }
+
+  /** A spot on our side that keeps the dome clear of the ball's path, near home. */
+  private dodgeX(world: World, s: SlimeBody): number {
+    const path = this.path;
+    const low = s.char.radius + world.mode.ball.radius + s.char.jump * 0.1;
+    const home = world.mode.homeX(world, this.side);
+    let bestX = home;
+    let bestScore = -Infinity;
+    for (const x of [home, s.x, s.minX, s.maxX, (s.minX + s.maxX) / 2]) {
+      let clear = 400;
+      for (let i = 0; i < path.length; i += 4) {
+        if (path.y[i] < low) clear = Math.min(clear, Math.abs(path.x[i] - x));
+      }
+      const score = clear - Math.abs(x - home) * 0.2;
+      if (score > bestScore) {
+        bestScore = score;
+        bestX = x;
+      }
+    }
+    return bestX;
+  }
+
+  /** Where the predicted path stops being playable for us (bounce rules). */
+  private findRallyEnd(world: World): number {
+    const path = this.path;
+    let left = bouncesLeft(world.mode, world, this.side);
+    if (left === Infinity) return path.length;
+    const mid = world.width / 2;
+    for (let i = 1; i < path.length; i++) {
+      if (!path.floor[i]) continue;
+      const ours = this.side === 0 ? path.x[i] < mid : path.x[i] > mid;
+      if (world.mode.floorEndsRally || ours) left--;
+      if (left < 0) return i;
+    }
+    return path.length;
   }
 
   /** Queue a plan to verify, skipping near-duplicates (common near walls). */
@@ -576,7 +662,7 @@ export class AiController implements Controller {
       mode.constrainSlime?.(sim);
       const i = k - holdSteps;
       if (i <= 0) continue; // ball still held for the serve
-      if (mode.floorEndsRally && path.floor[i]) return null;
+      if (i >= this.rallyEnd) return null;
       ball.x = path.x[i];
       ball.y = path.y[i];
       if (!slimeBallContact(sim, ball, spec.radius, contact)) continue;
@@ -591,7 +677,7 @@ export class AiController implements Controller {
       ball.y += contact.ny * contact.depth;
       ball.vx = v.bvx;
       ball.vy = v.bvy;
-      predictBall(ball, spec, mode.arena, world.ballSpeed, OUTCOME_HORIZON, this.outcome, path.t[i], 1, FIXED_DT * 2);
+      predictBall(ball, spec, mode.arena, world.nextTouchTimeScale, OUTCOME_HORIZON, this.outcome, path.t[i], 1, FIXED_DT * 2);
       const res = this.res;
       res.score = mode.evaluate(this.outcome, this.side, world);
       res.t = path.t[i];

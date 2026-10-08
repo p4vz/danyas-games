@@ -70,6 +70,13 @@ export interface SlimeMode {
   slimePhysics?: Partial<SlimePhysics>;
   /** Ball touching the floor ends the rally (volleyball) — the AI stops looking past it. */
   floorEndsRally?: boolean;
+  /** Bounces allowed on your side before you must hit it (tennis: 1). */
+  bouncesAllowed?: number;
+  /**
+   * Pong-style: the ball plays this much faster after every touch in a rally
+   * (×(1 + perTouch·n), up to ×max), so long rallies come to a head.
+   */
+  speedUp?: { perTouch: number; max: number };
   /** Points to win for Short / Standard / Long matches. */
   winScores: [number, number, number];
 
@@ -108,6 +115,16 @@ export interface SlimeMode {
 }
 
 export const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+
+/** How many more floor bounces on `side`'s half the rally allows (Infinity = no limit). */
+export function bouncesLeft(mode: SlimeMode, world: World, side: Side): number {
+  if (mode.floorEndsRally) return 0;
+  if (mode.bouncesAllowed === undefined) return Infinity;
+  return mode.bouncesAllowed - world.rally.bouncesBySide[side];
+}
+
+/** Net sports (volleyball, tennis): the floor ends rallies, so never back off. */
+export const isNetSport = (mode: SlimeMode) => mode.floorEndsRally === true || mode.bouncesAllowed !== undefined;
 
 /** True when x is in `side`'s attacking (opponent's) half. */
 export function inOpponentHalf(x: number, side: Side, width: number): boolean {

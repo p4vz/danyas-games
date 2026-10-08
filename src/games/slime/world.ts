@@ -58,8 +58,12 @@ export interface RallyState {
   lastTouch: { side: Side; x: number; y: number; time: number } | null;
   /** Floor bounces since the last slime touch… */
   bounces: number;
-  /** …and on which half of the court they landed. */
+  /** …and on which half of the court they landed… */
   bouncesBySide: [number, number];
+  /** …and the half the latest one was on (null: none since the touch). */
+  lastBounce: Side | null;
+  /** Ball time-scale multiplier from `mode.speedUp` (1 at the serve). */
+  speed: number;
   /** Mode-specific counters, from `mode.createRallyData()`. */
   data: Record<string, number>;
 }
@@ -125,6 +129,7 @@ export class World {
   readonly mode: SlimeMode;
   /** Slime movement rules for this match (defaults + mode overrides). */
   readonly physics: SlimePhysics;
+  /** The match's ball-speed setting (see `ballTimeScale` for the live value). */
   readonly ballSpeed: number;
   readonly winScore: number;
   readonly rng: () => number;
@@ -212,6 +217,8 @@ export class World {
       lastTouch: null,
       bounces: 0,
       bouncesBySide: [0, 0],
+      lastBounce: null,
+      speed: 1,
       data: mode?.createRallyData?.() ?? {},
     };
   }
@@ -252,13 +259,15 @@ export class World {
     const prevX = ball.x;
     const prevY = ball.y;
     const prevVy = ball.vy;
-    stepBall(ball, spec, this.mode.arena, dt, this.ballSpeed, this.stepOut);
+    stepBall(ball, spec, this.mode.arena, dt, this.ballTimeScale, this.stepOut);
     if (this.stepOut.floor && prevVy < -250) {
       this.events.push({ type: "bounce", strength: Math.min(1, -prevVy / 1200) });
     }
     if (this.stepOut.floor && !this.ballOnFloor) {
       this.rally.bounces++;
-      this.rally.bouncesBySide[ball.x < this.width / 2 ? 0 : 1]++;
+      const half: Side = ball.x < this.width / 2 ? 0 : 1;
+      this.rally.bouncesBySide[half]++;
+      this.rally.lastBounce = half;
     }
     this.ballOnFloor = this.stepOut.floor;
 
@@ -272,7 +281,7 @@ export class World {
       }
       if (impact > 0 || this.contactNow(s)) touching = true;
     }
-    this.ballAngle -= (ball.vx * dt * this.ballSpeed) / spec.radius;
+    this.ballAngle -= (ball.vx * dt * this.ballTimeScale) / spec.radius;
 
     if (this.phase === "play") {
       const ev = touchEvent ?? this.mode.checkRules({ world: this, ball, prevX, prevY, floor: this.stepOut.floor });
@@ -336,6 +345,19 @@ export class World {
     }
   }
 
+  /** How fast the ball plays right now: the setting × any rally speed-up. */
+  get ballTimeScale(): number {
+    return this.ballSpeed * this.rally.speed;
+  }
+
+  /** The ball's time scale once someone makes the next touch. */
+  get nextTouchTimeScale(): number {
+    const up = this.mode.speedUp;
+    if (!up) return this.ballTimeScale;
+    const r = this.rally;
+    return this.ballSpeed * Math.min(up.max, 1 + up.perTouch * (r.touches[0] + r.touches[1]));
+  }
+
   /** Can this slime reach the ball with its aux button right now? */
   inAuxReach(s: SlimeBody): boolean {
     return inAuxReach(s, this.ball, this.mode.ball.radius);
@@ -389,6 +411,9 @@ export class World {
       r.streak = last && last.side === s.side ? r.streak + 1 : 1;
       r.bounces = 0;
       r.bouncesBySide[0] = r.bouncesBySide[1] = 0;
+      r.lastBounce = null;
+      const up = this.mode.speedUp;
+      if (up) r.speed = Math.min(up.max, 1 + up.perTouch * (r.touches[0] + r.touches[1] - 1));
     }
     // Updated in place: this runs every step while a ball rests on a head.
     if (!last) r.lastTouch = { side: s.side, x: s.x, y: s.y, time: this.time };

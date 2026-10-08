@@ -257,7 +257,7 @@ export class SlimeRenderer {
       world.ball,
       mode.ball,
       mode.arena,
-      world.ballSpeed,
+      world.ballTimeScale,
       1.1,
       this.preview,
       0,
