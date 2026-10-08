@@ -1,3 +1,4 @@
+import { safeAreaInsets } from "./touchpad";
 import {
   MAX_SCALE,
   MIN_SCALE,
@@ -190,12 +191,13 @@ export class ControlsEditor {
   private positionWidgets(): void {
     const w = this.stage.clientWidth || window.innerWidth;
     const h = this.stage.clientHeight || window.innerHeight;
+    const safe = safeAreaInsets();
     this.zones.forEach((z, p) => {
-      const r = floatingZone(this.layout, p, w, h);
+      const r = floatingZone(this.layout, p, w, h, safe);
       Object.assign(z.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` });
     });
     for (const wd of this.widgets) {
-      const r = resolve(this.placement(wd.player, wd.kind), wd.kind, this.layout, wd.player, w, h);
+      const r = resolve(this.placement(wd.player, wd.kind), wd.kind, this.layout, wd.player, w, h, safe);
       Object.assign(wd.el.style, {
         width: `${r.size}px`,
         height: `${r.size}px`,

@@ -1,4 +1,4 @@
-import { floatingZone, resolve, type ControlSettings, type LayoutId, type Rect } from "./controls";
+import { NO_INSETS, floatingZone, resolve, type ControlSettings, type Insets, type LayoutId, type Rect } from "./controls";
 
 /** What one player's on-screen controls are doing right now. */
 export interface PadState {
@@ -24,6 +24,8 @@ interface StickParts {
 
 /** Fraction of the radius the knob may travel. */
 const KNOB_TRAVEL = 1;
+/** Touch target around a fixed stick, relative to its drawn size (thumbs land loosely). */
+const STICK_HIT = 1.5;
 
 /**
  * Virtual joystick(s) + aux button(s) overlaid on the game, one set per local
@@ -51,6 +53,10 @@ export class TouchPads {
     this.root.className = "pads";
     this.root.style.setProperty("--pad-opacity", String(settings.opacity));
     container.appendChild(this.root);
+    // Holding a button is a long press: never let it open a menu or callout.
+    const noMenu = (e: Event) => e.preventDefault();
+    this.root.addEventListener("contextmenu", noMenu);
+    this.cleanup.push(() => this.root.removeEventListener("contextmenu", noMenu));
 
     for (let i = 0; i < players; i++) {
       this.sticks.push(settings.style === "joystick" ? this.buildStick(i) : null);
@@ -89,13 +95,14 @@ export class TouchPads {
   layoutControls(): void {
     const w = this.root.clientWidth || window.innerWidth;
     const h = this.root.clientHeight || window.innerHeight;
+    const safe = safeAreaInsets();
     const players = this.layout === "one" ? this.settings.layouts.one : this.settings.layouts.two;
     players.forEach((pc, i) => {
       const stick = this.sticks[i];
       if (stick) {
-        stick.home = resolve(pc.stick, "stick", this.layout, i, w, h);
+        stick.home = resolve(pc.stick, "stick", this.layout, i, w, h, safe);
         const s = stick.home.size;
-        const hitSize = s * 1.35;
+        const hitSize = s * STICK_HIT;
         Object.assign(stick.hit.style, {
           width: `${hitSize}px`,
           height: `${hitSize}px`,
@@ -105,7 +112,7 @@ export class TouchPads {
         Object.assign(stick.base.style, { width: `${s}px`, height: `${s}px` });
         Object.assign(stick.knob.style, { width: `${s * 0.44}px`, height: `${s * 0.44}px` });
         if (stick.zone) {
-          const z = floatingZone(this.layout, i, w, h);
+          const z = floatingZone(this.layout, i, w, h, safe);
           Object.assign(stick.zone.style, {
             left: `${z.left}px`,
             top: `${z.top}px`,
@@ -117,7 +124,7 @@ export class TouchPads {
       }
       const aux = this.auxes[i];
       if (aux) {
-        const r = resolve(pc.aux, "aux", this.layout, i, w, h);
+        const r = resolve(pc.aux, "aux", this.layout, i, w, h, safe);
         Object.assign(aux.style, {
           width: `${r.size}px`,
           height: `${r.size}px`,
@@ -265,6 +272,24 @@ export class TouchPads {
     el.addEventListener(type, h);
     this.cleanup.push(() => el.removeEventListener(type, h));
   }
+}
+
+let probe: HTMLElement | null = null;
+
+/** The device's safe-area insets (notches, rounded corners, home indicator). */
+export function safeAreaInsets(): Insets {
+  if (typeof document === "undefined") return NO_INSETS;
+  if (!probe) {
+    probe = document.createElement("div");
+    probe.style.cssText =
+      "position:fixed;visibility:hidden;pointer-events:none;" +
+      "padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) " +
+      "env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px)";
+    document.body.appendChild(probe);
+  }
+  const cs = getComputedStyle(probe);
+  const px = (v: string) => parseFloat(v) || 0;
+  return { top: px(cs.paddingTop), right: px(cs.paddingRight), bottom: px(cs.paddingBottom), left: px(cs.paddingLeft) };
 }
 
 /** Whether this device has a touchscreen (show on-screen controls by default). */

@@ -12,7 +12,7 @@ import type { SlimeMode } from "./modes/mode";
 import { FIXED_DT } from "./physics";
 import { SlimeRenderer, type Banner } from "./render";
 import { Sfx } from "./sfx";
-import { TouchPads, hasTouch } from "./touchpad";
+import { TouchPads, hasTouch, safeAreaInsets } from "./touchpad";
 import type { Controller, Side } from "./types";
 import { SCORED_TIME, World } from "./world";
 
@@ -125,7 +125,7 @@ class SlimeSports implements Game {
     this.pads?.layoutControls();
     // Keep the field clear of the on-screen controls so no slime hides under a thumb.
     const withStick = this.controls.style === "joystick";
-    const fp = this.pads ? footprint(this.controls, this.layoutId(), w, h, withStick) : null;
+    const fp = this.pads ? footprint(this.controls, this.layoutId(), w, h, withStick, safeAreaInsets()) : null;
     this.renderer.setControlsFootprint(fp, mode);
     if (this.world && this.state !== "playing") this.draw();
   }

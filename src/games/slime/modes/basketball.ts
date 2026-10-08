@@ -74,9 +74,9 @@ export const basketball: SlimeMode = {
     label: "GRAB",
     holdLabel: "THROW",
     launchSpeed: 1000,
-    aimSpeed: 420,
+    aimSpeed: 150,
     maxHold: 2.5,
-    hint: "Hold GRAB to catch and carry the ball, let go to throw (aim with the stick). Bump a carrier to steal!",
+    hint: "Hold GRAB to catch and carry the ball (you move slower), let go to toss it up — tilt the stick to lob it a little. Bump a carrier to steal!",
   },
 
   slimeRange: (_side, radius) => [radius, W - radius],

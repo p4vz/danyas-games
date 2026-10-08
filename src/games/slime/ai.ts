@@ -13,9 +13,10 @@ import {
   type Velocities,
 } from "./physics";
 import { CHARACTERS } from "./characters";
+import type { AuxAction } from "./modes/mode";
 import { BallPath, predictBall } from "./predict";
 import { attackDir, idleIntent, type Controller, type Intent, type Side } from "./types";
-import type { World } from "./world";
+import { auxLaunch, type World } from "./world";
 
 export type Difficulty = "easy" | "medium" | "hard";
 
@@ -42,6 +43,10 @@ interface AiProfile {
   timingNoise: number;
   /** Polish the chosen plan with small position / timing nudges. */
   refine: boolean;
+  /** Uses the GRAB button (catch, carry to a shooting spot, throw). */
+  grabs: boolean;
+  /** Random error on the throw's stick aim (−1..1 units). */
+  throwNoise: number;
   /** Chance per plan to just play it safe with the first idea. */
   sloppiness: number;
 }
@@ -59,6 +64,8 @@ const PROFILES: Record<Difficulty, AiProfile> = {
     jumpOptions: 1,
     timingNoise: 0.05,
     refine: false,
+    grabs: false,
+    throwNoise: 0.3,
     sloppiness: 0.5,
   },
   medium: {
@@ -73,6 +80,8 @@ const PROFILES: Record<Difficulty, AiProfile> = {
     jumpOptions: 2,
     timingNoise: 0.02,
     refine: false,
+    grabs: true,
+    throwNoise: 0.6,
     sloppiness: 0.15,
   },
   hard: {
@@ -87,12 +96,22 @@ const PROFILES: Record<Difficulty, AiProfile> = {
     jumpOptions: 3,
     timingNoise: 0,
     refine: true,
+    grabs: true,
+    throwNoise: 0.02,
     sloppiness: 0,
   },
 };
 
 /** How far past a hit the AI judges where the ball ends up (s). */
 const OUTCOME_HORIZON = 1.7;
+/** Plan scores at or above this predict a score (see each mode's `evaluate`). */
+const SCORING = 2.5;
+/** Stick aims tried for a throw. */
+const THROW_AIMS = [-1, -0.6, -0.3, 0, 0.3, 0.6, 1];
+/** Spacing of candidate shooting spots (world units). */
+const SPOT_STEP = 45;
+/** Shooting spots rated per AI call while carrying (spreads the CPU cost over frames). */
+const SPOTS_PER_CALL = 3;
 
 /** Time to cover `d` from rest with accel-limited, speed-capped motion. */
 function travelTime(d: number, s: SlimeBody, env: SlimePhysics): number {
@@ -153,6 +172,13 @@ export class AiController implements Controller {
   private plan: Plan | null = null;
   private nextPlan = 0;
   private readonly intent: Intent = idleIntent();
+  /** Shooting-spot search while carrying: best so far, and the next spot to rate. */
+  private shotX: number | null = null;
+  private shotScore = -Infinity;
+  private spotNext = 0;
+  private spotEnd = 0;
+  private nextThrowCheck = 0;
+  private readonly throwSlime = { x: 0, y: 0, vx: 0, vy: 0, char: CHARACTERS[0] };
   // Unstick: notice when we're jammed (against a wall or the other slime, ball
   // going nowhere) and back off for a moment instead of pushing forever.
   private stuckFor = 0;
@@ -180,9 +206,20 @@ export class AiController implements Controller {
     intent.moveX = 0;
     intent.jump = false;
     intent.jumpPower = 1;
+    intent.aux = false;
 
     if (world.phase === "over" || world.phase === "scored") {
       intent.targetX = world.mode.homeX(world, this.side);
+      return intent;
+    }
+
+    const aux = world.mode.aux;
+    const grabbing = aux?.kind === "grab" && this.p.grabs;
+    if (grabbing && world.holder === this.side) return this.carry(world, s, aux, intent);
+    this.shotX = null;
+    if (world.holder !== null && world.holder !== this.side) {
+      // They're carrying it: charge — a bump knocks the ball loose.
+      intent.targetX = world.slimes[world.holder].x;
       return intent;
     }
 
@@ -194,6 +231,11 @@ export class AiController implements Controller {
 
     const plan = this.plan;
     intent.targetX = plan.targetX;
+
+    // Ball on our head and no scoring hit lined up: catch it and go shoot.
+    if (grabbing && plan.score < SCORING && world.holder === null && world.phase === "play" && world.inAuxReach(s)) {
+      intent.aux = true;
+    }
 
     if (plan.jumpAt !== null && world.time >= plan.jumpAt - 1e-9) {
       if (s.grounded) intent.jump = true;
@@ -218,6 +260,99 @@ export class AiController implements Controller {
       intent.jump = true;
     }
     return intent;
+  }
+
+  /**
+   * Carrying a grabbed ball: head for the best shooting spot and let go as
+   * soon as a throw from where we are is predicted to go in (or on arrival /
+   * before the auto-throw, with the best aim we've got).
+   */
+  private carry(world: World, s: SlimeBody, aux: AuxAction, intent: Intent): Intent {
+    intent.aux = true;
+    if (this.shotX === null) this.startSpotSearch(world, s);
+    const searching = this.searchSpots(world, s, aux);
+    const shotX = this.shotX ?? s.x;
+    const holdLeft = (aux.maxHold ?? 2.5) - world.holdTime;
+    const arrived = !searching && Math.abs(s.x - shotX) < 8 && Math.abs(s.vx) < 40;
+    // A defender closing in: get the throw off before they bump us.
+    const o = world.slimes[this.side === 0 ? 1 : 0];
+    const pressured = Math.abs(o.x - s.x) < s.char.radius + o.char.radius + 45;
+    if (world.time >= this.nextThrowCheck || holdLeft < 0.3 || pressured) {
+      this.nextThrowCheck = world.time + this.p.reaction * 0.5;
+      const t = this.throwSlime;
+      t.char = s.char;
+      t.x = s.x;
+      t.y = s.y;
+      t.vx = s.vx;
+      t.vy = s.vy;
+      const best = this.bestThrow(world, aux, t);
+      if (best.score >= SCORING || arrived || holdLeft < 0.3 || pressured) {
+        // Release: the stick deflection on this step is the aim.
+        intent.aux = false;
+        intent.targetX = null;
+        const noisy = best.aim + (world.rng() - 0.5) * 2 * this.p.throwNoise;
+        intent.moveX = Math.max(-1, Math.min(1, noisy));
+        this.shotX = null;
+        return intent;
+      }
+    }
+    intent.targetX = shotX;
+    return intent;
+  }
+
+  /** Best stick aim for throwing from slime state `t`, rated by the mode. */
+  private bestThrow(
+    world: World,
+    aux: AuxAction,
+    t: { x: number; y: number; vx: number; vy: number; char: SlimeBody["char"] },
+  ): { aim: number; score: number } {
+    const spec = world.mode.ball;
+    const b = this.tmpBall;
+    let aim = 0;
+    let score = -Infinity;
+    for (const a of THROW_AIMS) {
+      b.x = t.x;
+      b.y = 0;
+      auxLaunch(t, b, spec.radius, a, aux);
+      predictBall(b, spec, world.mode.arena, world.ballSpeed, OUTCOME_HORIZON, this.outcome, 0, 1, FIXED_DT * 2);
+      const sc = world.mode.evaluate(this.outcome, this.side, world);
+      if (sc > score) {
+        score = sc;
+        aim = a;
+      }
+    }
+    return { aim, score };
+  }
+
+  /** Begin looking for a shooting spot: our attacking half, from where we stand. */
+  private startSpotSearch(world: World, s: SlimeBody): void {
+    const mid = world.width / 2;
+    const [lo, hi] = attackDir(this.side) > 0 ? [mid - 100, s.maxX] : [s.minX, mid + 100];
+    this.spotNext = Math.max(s.minX, lo);
+    this.spotEnd = Math.min(s.maxX, hi);
+    this.shotX = s.x;
+    this.shotScore = -Infinity;
+  }
+
+  /**
+   * Rate a few more candidate spots (standing throw, best aim; nearer wins
+   * ties). Returns true while the search is still going.
+   */
+  private searchSpots(world: World, s: SlimeBody, aux: AuxAction): boolean {
+    const t = this.throwSlime;
+    t.char = s.char;
+    t.y = 0;
+    t.vx = 0;
+    t.vy = 0;
+    for (let n = 0; n < SPOTS_PER_CALL && this.spotNext <= this.spotEnd; n++, this.spotNext += SPOT_STEP) {
+      t.x = this.spotNext;
+      const sc = this.bestThrow(world, aux, t).score - Math.abs(t.x - s.x) / 2000;
+      if (sc > this.shotScore) {
+        this.shotScore = sc;
+        this.shotX = t.x;
+      }
+    }
+    return this.spotNext <= this.spotEnd;
   }
 
   /** Returns true (and fills `intent`) while backing off from a jam. */

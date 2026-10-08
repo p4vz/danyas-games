@@ -4,6 +4,7 @@ import { CHARACTERS, getCharacter } from "../characters";
 import { runHeadlessMatch } from "../headless";
 import { MODES } from "../modes";
 import { basketball } from "../modes/basketball";
+import { FIXED_DT } from "../physics";
 import { idleIntent } from "../types";
 import { World } from "../world";
 
@@ -66,5 +67,65 @@ describe("basketball shooting", () => {
       w.events.length = 0;
     }
     expect(baskets).toBeGreaterThanOrEqual(5);
+  });
+});
+
+describe("CPU and the GRAB button", () => {
+  const unguarded = (difficulty: "hard" | "medium") => {
+    const w = new World({
+      mode: basketball,
+      chars: [getCharacter("classic"), getCharacter("classic")],
+      ballSpeed: 1,
+      winScore: 999,
+      seed: 11,
+    });
+    const ai = new AiController(0, difficulty);
+    const parked = { ...idleIntent(), targetX: 0 };
+    let grabs = 0;
+    let throws = 0;
+    let baskets = 0;
+    for (let i = 0; i < 240 * 40; i++) {
+      if (w.phase === "ready") w.slimes[1].x = w.slimes[1].minX;
+      w.step([ai.getIntent(w), parked]);
+      for (const e of w.events) {
+        if (e.type === "grab" && e.side === 0) grabs++;
+        if (e.type === "launch" && e.side === 0) throws++;
+        if (e.type === "score" && e.score.scorer === 0) baskets++;
+      }
+      w.events.length = 0;
+      expect(w.holdTime).toBeLessThanOrEqual(basketball.aux!.maxHold! + FIXED_DT);
+    }
+    return { grabs, throws, baskets };
+  };
+
+  it("Hard catches, carries and throws, and keeps scoring", () => {
+    const r = unguarded("hard");
+    expect(r.grabs).toBeGreaterThan(3);
+    expect(r.throws).toBe(r.grabs);
+    expect(r.baskets).toBeGreaterThanOrEqual(5);
+  });
+
+  it("a CPU defender goes after a carrier and steals the ball", () => {
+    const w = new World({
+      mode: basketball,
+      chars: [getCharacter("classic"), getCharacter("classic")],
+      ballSpeed: 1,
+      winScore: 999,
+      seed: 3,
+    });
+    w.phase = "play";
+    const carrier = w.slimes[0];
+    w.ball.x = carrier.x;
+    w.ball.y = carrier.char.radius + basketball.ball.radius + 4;
+    w.ball.vx = w.ball.vy = 0;
+    const ai = new AiController(1, "hard");
+    let stolen = false;
+    for (let i = 0; i < 240 * 2.4 && !stolen; i++) {
+      // A human carrier just standing there, holding GRAB.
+      w.step([{ ...idleIntent(), aux: true }, ai.getIntent(w)]);
+      stolen = w.events.some((e) => e.type === "steal" && e.side === 1);
+      w.events.length = 0;
+    }
+    expect(stolen).toBe(true);
   });
 });

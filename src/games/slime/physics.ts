@@ -179,7 +179,7 @@ export function integrateSlime(s: SlimeBody, dt: number, env: SlimePhysics): voi
  * two slimes and grip is low, so domes are slippery: off centre you slide
  * downhill and fall off. Partially inelastic, mass-weighted.
  */
-export function collideSlimes(a: SlimeBody, b: SlimeBody, dt: number, env: SlimePhysics): void {
+export function collideSlimes(a: SlimeBody, b: SlimeBody, dt: number, env: SlimePhysics): boolean {
   const up = a.y >= b.y ? a : b;
   const lo = up === a ? b : a;
   const R1 = up.char.radius;
@@ -189,7 +189,7 @@ export function collideSlimes(a: SlimeBody, b: SlimeBody, dt: number, env: Slime
   let dx = px - lo.x;
   let dy = py - lo.y;
   const d = Math.hypot(dx, dy);
-  if (d >= R2) return;
+  if (d >= R2) return false;
   if (d < 1e-6) {
     dx = up.x >= lo.x ? 1 : -1;
     dy = 0;
@@ -235,6 +235,7 @@ export function collideSlimes(a: SlimeBody, b: SlimeBody, dt: number, env: Slime
   for (const s of [up, lo]) {
     s.x = Math.max(s.minX, Math.min(s.maxX, s.x));
   }
+  return true;
 }
 
 // ---------------------------------------------------------------- ball

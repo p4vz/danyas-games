@@ -72,6 +72,37 @@ const AUX_REACH = 22;
 const AUX_COOLDOWN = 0.35;
 /** Default auto-throw time for grab sports. */
 const DEFAULT_MAX_HOLD = 2.5;
+/** Carrying the ball slows you down, so defenders can catch up. */
+const CARRY_SPEED = 0.75;
+/** A bumped carrier fumbles: the ball pops up, nudged toward the thief. */
+const FUMBLE_POP = 320;
+const FUMBLE_NUDGE = 140;
+
+/** Is the ball on / just above this slime's dome (within aux-button reach)? */
+export function inAuxReach(s: SlimeBody, ball: Ball, ballRadius: number): boolean {
+  const R = s.char.radius;
+  return ball.y >= s.y + R * 0.25 && Math.hypot(ball.x - s.x, ball.y - s.y) < R + ballRadius + AUX_REACH;
+}
+
+/**
+ * Set the ball up as thrown / popped by slime `s`: sat on top of the dome,
+ * launched straight up and tilted by the stick (`moveX`), plus some of the
+ * slime's own motion. Shared by the world and the AI's throw planning.
+ */
+export function auxLaunch(
+  s: Pick<SlimeBody, "x" | "y" | "vx" | "vy" | "char">,
+  ball: Ball,
+  ballRadius: number,
+  moveX: number,
+  aux: AuxAction,
+): void {
+  const R = s.char.radius;
+  const off = Math.max(-R * 0.5, Math.min(R * 0.5, ball.x - s.x));
+  ball.x = s.x + off;
+  ball.y = s.y + Math.sqrt((R + ballRadius + 1) ** 2 - off * off);
+  ball.vx = moveX * aux.aimSpeed + s.vx * 0.4;
+  ball.vy = aux.launchSpeed + Math.max(0, s.vy) * 0.5;
+}
 
 /** Small deterministic PRNG so a match can be replayed / synced from a seed. */
 export function mulberry32(seed: number): () => number {
@@ -119,6 +150,8 @@ export class World {
 
   private stall = 0;
   private ballOnFloor = false;
+  /** The two slimes bumped this step. */
+  private slimesTouching = false;
   private readonly prevAux: [boolean, boolean] = [false, false];
   private readonly auxCooldown: [number, number] = [0, 0];
   /** After an auto-throw the button must be released before grabbing again. */
@@ -192,10 +225,14 @@ export class World {
     for (const s of this.slimes) {
       if (this.phase !== "over") applyIntent(s, intents[s.side], dt, this.physics);
       else s.vx *= 0.9;
+      if (this.holder === s.side) {
+        const cap = s.char.maxSpeed * CARRY_SPEED;
+        s.vx = Math.max(-cap, Math.min(cap, s.vx));
+      }
       integrateSlime(s, dt, this.physics);
       this.mode.constrainSlime?.(s);
     }
-    collideSlimes(a, b, dt, this.physics);
+    this.slimesTouching = collideSlimes(a, b, dt, this.physics);
 
     if (this.phase === "ready") {
       if (this.phaseTime >= READY_TIME) {
@@ -299,24 +336,14 @@ export class World {
     }
   }
 
-  /** Is the ball on / just above this slime's dome? */
-  private inAuxReach(s: SlimeBody): boolean {
-    const b = this.ball;
-    const R = s.char.radius;
-    return b.y >= s.y + R * 0.25 && Math.hypot(b.x - s.x, b.y - s.y) < R + this.mode.ball.radius + AUX_REACH;
+  /** Can this slime reach the ball with its aux button right now? */
+  inAuxReach(s: SlimeBody): boolean {
+    return inAuxReach(s, this.ball, this.mode.ball.radius);
   }
 
   /** Throw / pop the ball straight up, tilted by the stick. */
   private launch(s: SlimeBody, intent: Intent, aux: AuxAction): void {
-    const b = this.ball;
-    const R = s.char.radius;
-    const r = this.mode.ball.radius;
-    // Sit it on top of the dome so it leaves cleanly.
-    const off = Math.max(-R * 0.5, Math.min(R * 0.5, b.x - s.x));
-    b.x = s.x + off;
-    b.y = s.y + Math.sqrt((R + r + 1) ** 2 - off * off);
-    b.vx = intent.moveX * aux.aimSpeed + s.vx * 0.4;
-    b.vy = aux.launchSpeed + Math.max(0, s.vy) * 0.5;
+    auxLaunch(s, this.ball, this.mode.ball.radius, intent.moveX, aux);
     if (this.holder === s.side) this.holder = null;
     this.auxCooldown[s.side] = AUX_COOLDOWN;
     this.registerTouch(s);
@@ -337,9 +364,15 @@ export class World {
     b.vx = s.vx;
     b.vy = s.vy;
     const thief = this.slimes[other(holder)];
-    if (slimeBallContact(thief, b, this.mode.ball.radius, this.contact)) {
+    const touchedBall = slimeBallContact(thief, b, this.mode.ball.radius, this.contact);
+    if (touchedBall || this.slimesTouching) {
+      // Knocked loose: a bump on the carrier pops the ball up toward the thief.
       this.holder = null;
       this.auxCooldown[holder] = AUX_COOLDOWN;
+      if (!touchedBall) {
+        b.vx = Math.sign(thief.x - s.x) * FUMBLE_NUDGE + s.vx * 0.5;
+        b.vy = FUMBLE_POP;
+      }
       this.events.push({ type: "steal", side: thief.side });
       return false;
     }
