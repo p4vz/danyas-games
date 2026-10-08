@@ -16,7 +16,7 @@ import {
   type SlimePhysics,
   type Velocities,
 } from "./physics";
-import { other, type Intent, type Side } from "./types";
+import { attackDir, other, type Intent, type Side } from "./types";
 
 export type Phase = "ready" | "play" | "scored" | "over";
 
@@ -27,7 +27,9 @@ export type WorldEvent =
   | { type: "grab"; side: Side }
   | { type: "launch"; side: Side }
   | { type: "steal"; side: Side }
-  | { type: "reserve" };
+  | { type: "reserve" }
+  /** Clock ran out: `golden` = scores level, next goal wins. */
+  | { type: "whistle"; golden: boolean };
 
 export interface MatchConfig {
   mode: SlimeMode;
@@ -35,6 +37,8 @@ export interface MatchConfig {
   /** Ball time-scale: 1 = normal, 1.5 = turbo. */
   ballSpeed: number;
   winScore: number;
+  /** Play on the clock instead: seconds of live play, most points wins (golden goal on a tie). */
+  timeLimit?: number;
   seed: number;
 }
 
@@ -58,8 +62,12 @@ export interface RallyState {
   lastTouch: { side: Side; x: number; y: number; time: number } | null;
   /** Floor bounces since the last slime touch… */
   bounces: number;
-  /** …and on which half of the court they landed. */
+  /** …and on which half of the court they landed… */
   bouncesBySide: [number, number];
+  /** …and the half the latest one was on (null: none since the touch). */
+  lastBounce: Side | null;
+  /** Ball time-scale multiplier from `mode.speedUp` (1 at the serve). */
+  speed: number;
   /** Mode-specific counters, from `mode.createRallyData()`. */
   data: Record<string, number>;
 }
@@ -78,25 +86,55 @@ const CARRY_SPEED = 0.75;
 const FUMBLE_POP = 320;
 const FUMBLE_NUDGE = 140;
 
-/** Is the ball on / just above this slime's dome (within aux-button reach)? */
-export function inAuxReach(s: SlimeBody, ball: Ball, ballRadius: number): boolean {
+/**
+ * Can slime `s` reach the ball with its aux button: on / just above the dome,
+ * or for a shot anywhere close around it?
+ */
+export function inAuxReach(s: SlimeBody, ball: Ball, ballRadius: number, aux?: AuxAction): boolean {
   const R = s.char.radius;
-  return ball.y >= s.y + R * 0.25 && Math.hypot(ball.x - s.x, ball.y - s.y) < R + ballRadius + AUX_REACH;
+  const near = Math.hypot(ball.x - s.x, ball.y - s.y) < R + ballRadius + AUX_REACH;
+  return near && (aux?.kind === "shot" || ball.y >= s.y + R * 0.25);
 }
 
 /**
- * Set the ball up as thrown / popped by slime `s`: sat on top of the dome,
- * launched straight up and tilted by the stick (`moveX`), plus some of the
- * slime's own motion. Shared by the world and the AI's throw planning.
+ * Set the ball up as thrown / popped / shot by slime `s`. Pops and throws sit
+ * it on top of the dome and launch it straight up, tilted by the stick
+ * (`moveX`); a shot strikes it where it lies toward the stick direction (or
+ * flicks it over the dome if it's behind). Plus some of the slime's own
+ * motion. Shared by the world and the AI's planning.
  */
 export function auxLaunch(
-  s: Pick<SlimeBody, "x" | "y" | "vx" | "vy" | "char">,
+  s: Pick<SlimeBody, "side" | "x" | "y" | "vx" | "vy" | "char">,
   ball: Ball,
   ballRadius: number,
   moveX: number,
   aux: AuxAction,
 ): void {
   const R = s.char.radius;
+  if (aux.kind === "shot") {
+    const dir = Math.abs(moveX) > 0.3 ? Math.sign(moveX) : attackDir(s.side);
+    const speed = aux.shotSpeed ?? aux.aimSpeed;
+    if (Math.sign(ball.x - s.x) === dir) {
+      // On the shooting side: strike it where it lies, just clear of the dome.
+      const dx = ball.x - s.x;
+      const dy = Math.max(0, ball.y - s.y);
+      const d = Math.hypot(dx, dy) || 1;
+      const min = R + ballRadius + 1;
+      if (d < min) {
+        ball.x = s.x + (dx / d) * min;
+        ball.y = s.y + (dy / d) * min;
+      }
+      ball.vx = dir * speed + s.vx * 0.4;
+      ball.vy = aux.launchSpeed;
+      return;
+    }
+    // Behind us: hook it up over the dome and away.
+    ball.x = s.x;
+    ball.y = s.y + R + ballRadius + 1;
+    ball.vx = dir * speed * 0.5 + s.vx * 0.4;
+    ball.vy = aux.launchSpeed * 2;
+    return;
+  }
   const off = Math.max(-R * 0.5, Math.min(R * 0.5, ball.x - s.x));
   ball.x = s.x + off;
   ball.y = s.y + Math.sqrt((R + ballRadius + 1) ** 2 - off * off);
@@ -125,8 +163,11 @@ export class World {
   readonly mode: SlimeMode;
   /** Slime movement rules for this match (defaults + mode overrides). */
   readonly physics: SlimePhysics;
+  /** The match's ball-speed setting (see `ballTimeScale` for the live value). */
   readonly ballSpeed: number;
   readonly winScore: number;
+  /** Seconds of live play the match lasts (null = first to `winScore`). */
+  readonly timeLimit: number | null;
   readonly rng: () => number;
 
   time = 0;
@@ -137,6 +178,10 @@ export class World {
   winner: Side | null = null;
   lastScore: ScoreEvent | null = null;
   rally: RallyState = World.freshRally(null);
+  /** Timed matches: live-play seconds left (stops between points). */
+  clock: number | null = null;
+  /** Timed match level at the whistle: the next point wins. */
+  goldenGoal = false;
   /** Who is carrying the ball (grab sports), and for how long. */
   holder: Side | null = null;
   holdTime = 0;
@@ -167,6 +212,8 @@ export class World {
     this.physics = { ...DEFAULT_SLIME_PHYSICS, ...cfg.mode.slimePhysics };
     this.ballSpeed = cfg.ballSpeed;
     this.winScore = cfg.winScore;
+    this.timeLimit = cfg.timeLimit ?? null;
+    this.clock = this.timeLimit;
     this.rng = mulberry32(cfg.seed);
     this.slimes = [this.makeSlime(0, cfg.chars[0]), this.makeSlime(1, cfg.chars[1])];
     this.server = this.mode.nextServer(null);
@@ -212,6 +259,8 @@ export class World {
       lastTouch: null,
       bounces: 0,
       bouncesBySide: [0, 0],
+      lastBounce: null,
+      speed: 1,
       data: mode?.createRallyData?.() ?? {},
     };
   }
@@ -252,13 +301,15 @@ export class World {
     const prevX = ball.x;
     const prevY = ball.y;
     const prevVy = ball.vy;
-    stepBall(ball, spec, this.mode.arena, dt, this.ballSpeed, this.stepOut);
+    stepBall(ball, spec, this.mode.arena, dt, this.ballTimeScale, this.stepOut);
     if (this.stepOut.floor && prevVy < -250) {
       this.events.push({ type: "bounce", strength: Math.min(1, -prevVy / 1200) });
     }
     if (this.stepOut.floor && !this.ballOnFloor) {
       this.rally.bounces++;
-      this.rally.bouncesBySide[ball.x < this.width / 2 ? 0 : 1]++;
+      const half: Side = ball.x < this.width / 2 ? 0 : 1;
+      this.rally.bouncesBySide[half]++;
+      this.rally.lastBounce = half;
     }
     this.ballOnFloor = this.stepOut.floor;
 
@@ -272,13 +323,20 @@ export class World {
       }
       if (impact > 0 || this.contactNow(s)) touching = true;
     }
-    this.ballAngle -= (ball.vx * dt * this.ballSpeed) / spec.radius;
+    this.ballAngle -= (ball.vx * dt * this.ballTimeScale) / spec.radius;
 
     if (this.phase === "play") {
       const ev = touchEvent ?? this.mode.checkRules({ world: this, ball, prevX, prevY, floor: this.stepOut.floor });
       if (ev) {
         this.award(ev);
         return;
+      }
+      if (this.clock !== null && !this.goldenGoal) {
+        this.clock = Math.max(0, this.clock - dt);
+        if (this.clock === 0) {
+          this.fullTime();
+          return;
+        }
       }
       // Re-serve a ball that's stuck: parked on a crossbar / rim / net top, or
       // wedged against a wall by slimes. A loose ball lying on open floor is
@@ -307,6 +365,8 @@ export class World {
   /** Aux button: grab / carry / throw, or pop. Only during live play. */
   private updateAux(intents: [Intent, Intent], aux: AuxAction): void {
     const dt = FIXED_DT;
+    const pops = this.popping;
+    pops.length = 0;
     for (const s of this.slimes) {
       const side = s.side;
       const pressed = intents[side].aux && this.phase === "play";
@@ -331,14 +391,39 @@ export class World {
           this.events.push({ type: "grab", side });
         }
       } else if (edge && ready && this.inAuxReach(s)) {
-        this.launch(s, intents[side], aux);
+        pops.push(s);
       }
     }
+    // Both popping the same ball on the same step: the nearer slime gets it
+    // (a coin flip on a dead heat), so neither side wins every tie.
+    if (pops.length === 2) {
+      const gap = (s: SlimeBody) => Math.hypot(this.ball.x - s.x, this.ball.y - s.y) - s.char.radius;
+      const d = gap(pops[0]) - gap(pops[1]);
+      if (d > 1e-6 || (Math.abs(d) <= 1e-6 && this.rng() < 0.5)) pops.reverse();
+      this.auxCooldown[pops[1].side] = AUX_COOLDOWN;
+    }
+    if (pops.length > 0) this.launch(pops[0], intents[pops[0].side], aux);
+  }
+
+  /** Scratch: slimes popping / shooting the ball this step. */
+  private readonly popping: SlimeBody[] = [];
+
+  /** How fast the ball plays right now: the setting × any rally speed-up. */
+  get ballTimeScale(): number {
+    return this.ballSpeed * this.rally.speed;
+  }
+
+  /** The ball's time scale once someone makes the next touch. */
+  get nextTouchTimeScale(): number {
+    const up = this.mode.speedUp;
+    if (!up) return this.ballTimeScale;
+    const r = this.rally;
+    return this.ballSpeed * Math.min(up.max, 1 + up.perTouch * (r.touches[0] + r.touches[1]));
   }
 
   /** Can this slime reach the ball with its aux button right now? */
   inAuxReach(s: SlimeBody): boolean {
-    return inAuxReach(s, this.ball, this.mode.ball.radius);
+    return inAuxReach(s, this.ball, this.mode.ball.radius, this.mode.aux);
   }
 
   /** Throw / pop the ball straight up, tilted by the stick. */
@@ -389,6 +474,9 @@ export class World {
       r.streak = last && last.side === s.side ? r.streak + 1 : 1;
       r.bounces = 0;
       r.bouncesBySide[0] = r.bouncesBySide[1] = 0;
+      r.lastBounce = null;
+      const up = this.mode.speedUp;
+      if (up) r.speed = Math.min(up.max, 1 + up.perTouch * (r.touches[0] + r.touches[1] - 1));
     }
     // Updated in place: this runs every step while a ball rests on a head.
     if (!last) r.lastTouch = { side: s.side, x: s.x, y: s.y, time: this.time };
@@ -418,6 +506,20 @@ export class World {
     this.phase = "scored";
     this.phaseTime = 0;
     this.events.push({ type: "score", score: ev });
-    if (this.scores[ev.scorer] >= this.winScore) this.winner = ev.scorer;
+    if (this.timeLimit !== null ? this.goldenGoal : this.scores[ev.scorer] >= this.winScore) this.winner = ev.scorer;
+  }
+
+  /** The clock ran out mid-rally: the leader wins, or it's golden goal. */
+  private fullTime(): void {
+    const [a, b] = this.scores;
+    if (a === b) {
+      this.goldenGoal = true;
+      this.events.push({ type: "whistle", golden: true });
+      return; // play on
+    }
+    this.winner = a > b ? 0 : 1;
+    this.phase = "over";
+    this.phaseTime = 0;
+    this.events.push({ type: "whistle", golden: false });
   }
 }

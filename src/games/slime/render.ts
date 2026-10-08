@@ -159,6 +159,19 @@ export class SlimeRenderer {
 
     for (const s of world.slimes) this.drawSlime(s, world);
 
+    // Rally speed-up (Pong-style modes): a trail that grows as the ball heats up.
+    const heat = world.rally.speed - 1;
+    if (heat > 0.01 && world.phase === "play") {
+      const k = world.ballTimeScale * 0.018;
+      ctx.fillStyle = mode.accent;
+      for (let i = 3; i >= 1; i--) {
+        ctx.globalAlpha = Math.min(0.5, heat * 0.7) * (1 - i / 4);
+        ctx.beginPath();
+        ctx.arc(ball.x - ball.vx * k * i, ball.y - ball.vy * k * i, r * (1 - i * 0.15), 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    }
     mode.drawBall(ctx, ball.x, ball.y, r, world.ballAngle);
     // Carried ball: ring runs down until the auto-throw.
     if (world.holder !== null && mode.aux?.maxHold) {
@@ -178,7 +191,7 @@ export class SlimeRenderer {
       ctx.arc(ball.x, ball.y, r + 8, Math.PI / 2, Math.PI / 2 + (hold / READY_TIME) * Math.PI * 2);
       ctx.stroke();
     }
-    mode.drawForeground?.(ctx);
+    mode.drawForeground?.(ctx, world);
 
     // Finger targets.
     for (let i = 0; i < extras.fingers.length; i++) {
@@ -257,7 +270,7 @@ export class SlimeRenderer {
       world.ball,
       mode.ball,
       mode.arena,
-      world.ballSpeed,
+      world.ballTimeScale,
       1.1,
       this.preview,
       0,
