@@ -1,6 +1,7 @@
 import type { GameFactory } from "../core/Game";
 import { createGeometryBeat } from "./geometry-beat";
 import { createSlimeSports } from "./slime";
+import { createCastleBusters } from "./tanks";
 
 export type GameStatus = "playable" | "soon";
 
@@ -35,6 +36,14 @@ export const GAMES: GameEntry[] = [
     accent: "#5be37d",
     status: "playable",
     factory: createSlimeSports,
+  },
+  {
+    id: "castle-busters",
+    title: "Castle Busters",
+    tagline: "Turn-based tank battles for 2–4 players. Blast castles, grab upgrades.",
+    accent: "#ff9f43",
+    status: "playable",
+    factory: createCastleBusters,
   },
   {
     id: "block-stack",

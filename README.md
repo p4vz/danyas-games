@@ -28,7 +28,8 @@ src/
 └── games/
     ├── registry.ts      # single source of truth for the collection
     ├── geometry-beat/   # first game (Geometry Dash clone, beat-synced)
-    └── slime/           # Slime Sports: volleyball, soccer, basketball
+    ├── slime/           # Slime Sports: volleyball, soccer, basketball
+    └── tanks/           # Castle Busters: turn-based tank artillery, 2–4 players
 ```
 
 ### Adding a game
@@ -265,3 +266,47 @@ npm run cap:android
 
 Game *clones* are reimplementations; no copyrighted assets are bundled. The
 Geometry Beat soundtrack is procedurally generated, not sampled.
+
+## Castle Busters — how it works
+
+A side-view, turn-based tank game in the spirit of Castle Busters / Pocket
+Tanks, for 2–4 players passing one device around (hot-seat).
+
+```
+src/games/tanks/
+├── index.ts      # shell: setup screen (players, names, colours, options), match flow
+├── match.ts      # authoritative turn-based sim: fixed 120 Hz steps, phases, damage, crates
+├── terrain.ts    # destructible terrain mask (dirt / stone castles / bedrock) + painter
+├── upgrades.ts   # crate upgrades: attack, health, speed
+├── controls.ts   # on-screen control bar + keyboard (the "local seat")
+├── net.ts        # seat / transport interfaces for future online play
+├── render.ts     # canvas renderer, effects, letterboxed world
+├── sfx.ts        # synthesized sounds
+└── __tests__/    # terrain, turns, damage, crates, determinism, snapshots
+```
+
+**Turn**: tilt the cannon (▼ ▲ or W/S, ↑/↓), optionally drive (◀ ▶ or A/D,
+←/→, limited by fuel each turn), then hold **FIRE** (or Space) to charge and
+release to shoot. A white tick on the power bar marks your last shot's power.
+
+**Options**: 2–4 players with names and colours, driving on/off, castle walls
+on/off, wind (calm / breezy / stormy, re-rolled each turn), upgrade drop rate,
+and an optional turn timer (15–60 s). When the timer runs out, a shot you are
+charging fires as it is; otherwise you lose the turn.
+
+**Upgrades** parachute in at random spots on a random timer (it only counts
+down while someone is aiming). Drive into a crate, or catch it in your blast,
+to collect it: ⚔ +25% damage, ✚ +35 HP and +15 max HP, ⚡ +30% move speed
+and fuel. They stack and last the whole match.
+
+**Terrain** is a W×H material mask: explosions carve dirt fully but only break
+stone near the centre of the blast, so castle walls take a few hits. Tanks fall
+into craters and take damage from long drops.
+
+**Online-ready design**: `Match` never touches the DOM, is fully deterministic
+for a seed and per-step inputs, and serialises to a small JSON snapshot
+(terrain is rebuilt from the seed plus the crater list). Each player has a
+*seat* (`net.ts`) that supplies their inputs. Today every seat is the shared
+local control bar. For online play, one device hosts and sends the config, the
+active player's inputs are streamed to everyone (a `RemoteSeat`), and the host
+sends a snapshot at the end of every turn to correct any drift.
