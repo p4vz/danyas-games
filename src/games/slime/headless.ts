@@ -11,6 +11,8 @@ export interface HeadlessMatch {
   difficulties: [Difficulty, Difficulty];
   ballSpeed?: number;
   winScore?: number;
+  /** Play on the clock (seconds of live play) instead of first-to-N. */
+  timeLimit?: number;
   seed?: number;
   /** Give up after this much simulated time (seconds). */
   maxSeconds?: number;
@@ -31,6 +33,8 @@ export interface MatchStats {
   jumps: [number, number];
   /** Simulated seconds per scored rally (excludes serve/celebration pauses). */
   rallyTimes: number[];
+  /** How many points ended each way ("GOAL!", "FAULT!", …). */
+  labels: Record<string, number>;
   /** Non-finite position/velocity ever seen. */
   nan: boolean;
 }
@@ -45,6 +49,7 @@ export function runHeadlessMatch(m: HeadlessMatch): MatchStats {
     chars: m.chars,
     ballSpeed: m.ballSpeed ?? 1,
     winScore: m.winScore ?? m.mode.winScores[0],
+    timeLimit: m.timeLimit,
     seed: m.seed ?? 1,
   });
   const ai: Controller[] = [new AiController(0, m.difficulties[0]), new AiController(1, m.difficulties[1])];
@@ -59,6 +64,7 @@ export function runHeadlessMatch(m: HeadlessMatch): MatchStats {
     hits: 0,
     jumps: [0, 0],
     rallyTimes: [],
+    labels: {},
     nan: false,
   };
   let rallyStart = 0;
@@ -75,6 +81,7 @@ export function runHeadlessMatch(m: HeadlessMatch): MatchStats {
       else if (e.type === "score") {
         stats.rallies++;
         stats.rallyTimes.push(world.time - rallyStart);
+        stats.labels[e.score.label] = (stats.labels[e.score.label] ?? 0) + 1;
       }
     }
     world.events.length = 0;

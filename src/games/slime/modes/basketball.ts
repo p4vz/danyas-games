@@ -1,4 +1,4 @@
-import type { Ball } from "../physics";
+import type { Ball, SlimeBody } from "../physics";
 import type { BallPath } from "../predict";
 import { attackDir, other, type Side } from "../types";
 import type { World } from "../world";
@@ -8,13 +8,19 @@ const W = 1000;
 const H = 600;
 const BOARD_X = 18;
 const BOARD_R = 6;
-const BOARD_BOTTOM = 250;
-const BOARD_TOP = 410;
-const RIM_Y = 300;
-const RIM_FRONT = 118;
+/**
+ * Hoop height is a balance: low enough that a jumping defender can get a
+ * dome on a ball dropping toward the rim (the weakest jumper, Tank, reaches a
+ * ball centre ~38 above it; Leafy ~110), high enough that nobody can just
+ * stand under it.
+ */
+const RIM_Y = 190;
+const BOARD_BOTTOM = RIM_Y - 50;
+const BOARD_TOP = RIM_Y + 110;
+/** The net hangs this far below the rim; slimes can't jump up through it. */
+const NET_DEPTH = 46;
+const RIM_FRONT = 100;
 const RIM_R = 5;
-/** Shots released further than this from the target rim count for 3. */
-const THREE_DIST = 430;
 
 /** Rim opening (ball-centre x range) for each hoop, by the side that *defends* it. */
 const OPENING: [number, number][] = [
@@ -22,6 +28,11 @@ const OPENING: [number, number][] = [
   [W - (RIM_FRONT - RIM_R), W - (BOARD_X + BOARD_R)],
 ];
 const rimCentre = (defender: Side) => (OPENING[defender][0] + OPENING[defender][1]) / 2;
+/** Shots released further than this from the target rim count for 3: your own half. */
+const THREE_DIST = W / 2 - rimCentre(0);
+
+/** Hoop geometry, for tests and tools. */
+export const HOOP = { rimY: RIM_Y, netDepth: NET_DEPTH, rimFront: RIM_FRONT, opening: OPENING, rimCentre };
 
 /** Side that scores if the ball moved down through a rim between two samples. */
 function basketBetween(px: number, py: number, x: number, y: number): Side | null {
@@ -81,6 +92,17 @@ export const basketball: SlimeMode = {
 
   slimeRange: (_side, radius) => [radius, W - radius],
   startX: (side) => (side === 0 ? 260 : W - 260),
+  constrainSlime(s: SlimeBody) {
+    // Under the hoop the net is a ceiling: defend from in front of the rim,
+    // not by poking up through the net.
+    const R = s.char.radius;
+    const underHoop = s.x - R * 0.5 < RIM_FRONT || s.x + R * 0.5 > W - RIM_FRONT;
+    const netBottom = RIM_Y - NET_DEPTH;
+    if (underHoop && s.y < netBottom && s.y + R > netBottom) {
+      s.y = Math.max(0, netBottom - R);
+      if (s.vy > 0) s.vy = 0;
+    }
+  },
   nextServer: (scorer) => (scorer === null ? null : other(scorer)),
   serve(ball: Ball, server, rng) {
     ball.x = server === null ? W / 2 : server === 0 ? 300 : W - 300;
@@ -119,7 +141,13 @@ export const basketball: SlimeMode = {
   },
   homeX(world: World, side: Side) {
     const hoop = rimCentre(side);
-    return hoop + (world.ball.x - hoop) * 0.5;
+    const ballInOurHalf = side === 0 ? world.ball.x < W / 2 : world.ball.x > W / 2;
+    if (!ballInOurHalf) return hoop + (world.ball.x - hoop) * 0.5;
+    // Guard the rim: stand just in front of it (not under the net), ready to
+    // jump at a shot dropping toward the hoop.
+    const R = world.slimes[side].char.radius;
+    const guard = RIM_FRONT + R * 0.5 + 20;
+    return side === 0 ? guard : W - guard;
   },
 
   drawArena(ctx) {
@@ -155,11 +183,11 @@ export const basketball: SlimeMode = {
         const bot = a + inset + ((b - a - 2 * inset) * k) / 4;
         ctx.beginPath();
         ctx.moveTo(top, RIM_Y);
-        ctx.lineTo(bot, RIM_Y - 46);
+        ctx.lineTo(bot, RIM_Y - NET_DEPTH);
         ctx.stroke();
       }
-      for (let y = RIM_Y - 15; y > RIM_Y - 46; y -= 15) {
-        const f = (RIM_Y - y) / 46;
+      for (let y = RIM_Y - 15; y > RIM_Y - NET_DEPTH; y -= 15) {
+        const f = (RIM_Y - y) / NET_DEPTH;
         ctx.beginPath();
         ctx.moveTo(a + inset * f, y);
         ctx.lineTo(b - inset * f, y);

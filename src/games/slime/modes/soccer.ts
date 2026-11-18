@@ -1,4 +1,4 @@
-import type { Ball, SlimeBody } from "../physics";
+import { FIXED_DT, type Ball, type SlimeBody } from "../physics";
 import type { BallPath } from "../predict";
 import { attackDir, other, type Side } from "../types";
 import type { World } from "../world";
@@ -10,6 +10,17 @@ const H = 520;
 const GOAL_D = 72;
 const BAR_Y = 150;
 const BAR_R = 5;
+/** Parked in your own goal this long (s) and the other side gets a goal. */
+export const HANG_LIMIT = 4;
+/** When the goal-hanging countdown shows over the slime. */
+const HANG_WARN = 1.5;
+
+/** Is this slime parked in its own goal mouth? */
+function inOwnGoal(s: SlimeBody): boolean {
+  return s.y < BAR_Y && (s.side === 0 ? s.x < GOAL_D : s.x > W - GOAL_D);
+}
+
+const HANG_KEYS = ["hang0", "hang1"] as const;
 
 /** Which side scores if the ball centre is at (x, y)? */
 function goalAt(x: number, y: number, r: number): Side | null {
@@ -23,7 +34,8 @@ export const soccer: SlimeMode = {
   id: "soccer",
   name: "Soccer",
   tagline: "Push, header, score.",
-  howTo: "Get the ball into the goal on the other side. Defend your own!",
+  howTo:
+    "Get the ball into the goal on the other side. Defend your own — but no parking in it: stay in your own goal for 4 seconds and they get a goal!",
   accent: "#5be37d",
   ball: {
     radius: 15,
@@ -46,6 +58,7 @@ export const soccer: SlimeMode = {
   },
   theme: { skyTop: "#123a6b", skyBottom: "#3d7fc0", ground: "#3fa34d", groundLine: "#2d7d39" },
   winScores: [3, 5, 9],
+  timeLimits: [60, 120, 240],
   aux: {
     kind: "pop",
     label: "FLICK",
@@ -81,9 +94,18 @@ export const soccer: SlimeMode = {
     ball.vx = (rng() - 0.5) * 40;
     ball.vy = 0;
   },
-  checkRules({ ball }) {
+  createRallyData: () => ({ hang0: 0, hang1: 0 }),
+  checkRules({ world, ball }) {
     const scorer = goalAt(ball.x, ball.y, this.ball.radius);
-    return scorer === null ? null : { scorer, points: 1, label: "GOAL!" };
+    if (scorer !== null) return { scorer, points: 1, label: "GOAL!" };
+    // No goal-hanging: camp in your own goal too long and it's their goal.
+    const data = world.rally.data;
+    for (const s of world.slimes) {
+      const key = HANG_KEYS[s.side];
+      data[key] = inOwnGoal(s) ? data[key] + FIXED_DT : 0;
+      if (data[key] >= HANG_LIMIT) return { scorer: other(s.side), points: 1, label: "GOAL HANGING!" };
+    }
+    return null;
   },
 
   evaluate(path: BallPath, side: Side, _world: World) {
@@ -103,9 +125,12 @@ export const soccer: SlimeMode = {
     const mean = sum / Math.ceil(path.length / 8);
     return clamp(end * 0.8 + mean * 0.6, -2, 2);
   },
+  aiDefends: true,
   homeX(world: World, side: Side) {
-    const goal = side === 0 ? GOAL_D * 0.6 : W - GOAL_D * 0.6;
-    return goal + (world.ball.x - goal) * 0.45;
+    // Guard the goal from just outside it: no goal-hanging.
+    const R = world.slimes[side].char.radius;
+    const mouth = side === 0 ? GOAL_D + R * 0.3 : W - GOAL_D - R * 0.3;
+    return mouth + (world.ball.x - mouth) * 0.45;
   },
 
   drawArena(ctx) {
@@ -118,7 +143,23 @@ export const soccer: SlimeMode = {
       ctx.fillRect(gx, 0, GOAL_D, BAR_Y);
     }
   },
-  drawForeground(ctx) {
+  drawForeground(ctx, world) {
+    // Goal-hanging countdown over a slime parked in its own goal.
+    for (const s of world.slimes) {
+      const t = world.rally.data[HANG_KEYS[s.side]] ?? 0;
+      if (t < HANG_WARN || world.phase !== "play") continue;
+      const left = 1 - (t - HANG_WARN) / (HANG_LIMIT - HANG_WARN);
+      const y = s.y + s.char.radius + 30;
+      ctx.lineWidth = 5;
+      ctx.strokeStyle = "#00000055";
+      ctx.beginPath();
+      ctx.arc(s.x, y, 17, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = "#ff5a4f";
+      ctx.beginPath();
+      ctx.arc(s.x, y, 17, Math.PI / 2, Math.PI / 2 + left * Math.PI * 2);
+      ctx.stroke();
+    }
     for (const [gx, post] of [
       [0, GOAL_D],
       [W - GOAL_D, W - GOAL_D],

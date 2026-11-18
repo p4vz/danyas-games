@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { getCharacter } from "../characters";
-import { basketball } from "../modes/basketball";
+import { CHARACTERS, getCharacter } from "../characters";
+import { HOOP, basketball } from "../modes/basketball";
 import {
   DEFAULT_SLIME_PHYSICS,
   FIXED_DT,
@@ -121,16 +121,18 @@ describe("ball statics", () => {
     return { minY, maxY };
   };
 
+  const x = HOOP.rimCentre(0);
+
   it("a ball can't come up through the hoop from below", () => {
-    const b: Ball = { x: 68, y: 200, vx: 0, vy: 900 };
+    const b: Ball = { x, y: HOOP.rimY - 100, vx: 0, vy: 900 };
     const { maxY } = run(b, 0.6);
-    expect(maxY).toBeLessThanOrEqual(300 - spec.radius + 1e-6);
+    expect(maxY).toBeLessThanOrEqual(HOOP.rimY - spec.radius + 1e-6);
   });
 
   it("a ball dropped into the hoop falls through", () => {
-    const b: Ball = { x: 68, y: 420, vx: 0, vy: 0 };
+    const b: Ball = { x, y: HOOP.rimY + 120, vx: 0, vy: 0 };
     const { minY } = run(b, 0.8);
-    expect(minY).toBeLessThan(250);
+    expect(minY).toBeLessThan(HOOP.rimY - HOOP.netDepth);
   });
 });
 
@@ -151,5 +153,42 @@ describe("ball pinned under a slime", () => {
     }
     expect(s.y).toBe(0);
     expect(Math.abs(ball.x - s.x)).toBeGreaterThan(s.char.radius);
+  });
+});
+
+describe("basketball hoop is defendable", () => {
+  it("every character can jump from in front of the rim and touch a ball above it", () => {
+    const r = basketball.ball.radius;
+    for (const c of CHARACTERS) {
+      // Closest legal spot to the rim that isn't under the net.
+      const s = slime(c.id, HOOP.rimFront + c.radius * 0.5 + 1);
+      s.minX = 0;
+      let top = 0;
+      applyIntent(s, { ...idleIntent(), jump: true }, FIXED_DT, DEFAULT_SLIME_PHYSICS);
+      for (let t = 0; t < 1.2; t += FIXED_DT) {
+        integrateSlime(s, FIXED_DT, DEFAULT_SLIME_PHYSICS);
+        basketball.constrainSlime!(s);
+        top = Math.max(top, s.y);
+      }
+      // A shot dropping toward the rim from in front: just outside the rim's
+      // front edge, its underside still above the rim.
+      const ball: Ball = { x: HOOP.rimFront + 20, y: HOOP.rimY + r + 10, vx: 0, vy: 0 };
+      const dx = Math.abs(ball.x - s.x);
+      const reachY = top + Math.sqrt((c.radius + r) ** 2 - dx * dx);
+      expect(reachY, c.id).toBeGreaterThan(ball.y);
+    }
+  });
+
+  it("you can't jump up through the net from underneath", () => {
+    const s = slime("leafy", HOOP.rimCentre(0));
+    s.minX = 0;
+    applyIntent(s, { ...idleIntent(), jump: true }, FIXED_DT, DEFAULT_SLIME_PHYSICS);
+    let top = 0;
+    for (let t = 0; t < 1; t += FIXED_DT) {
+      integrateSlime(s, FIXED_DT, DEFAULT_SLIME_PHYSICS);
+      basketball.constrainSlime!(s);
+      top = Math.max(top, s.y + s.char.radius);
+    }
+    expect(top).toBeLessThanOrEqual(HOOP.rimY - HOOP.netDepth + 1e-6);
   });
 });

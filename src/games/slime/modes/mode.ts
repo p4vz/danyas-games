@@ -17,7 +17,13 @@ export interface ScoreEvent {
  *  - "pop": tap to flick a ball that's on/near your head straight up.
  */
 export interface AuxAction {
-  kind: "grab" | "pop";
+  /**
+   * grab: hold to catch and carry, release to throw up.
+   * pop: tap to pop a ball on your head straight up.
+   * shot: tap to strike a ball beside you (or flick it over your head)
+   *   toward the stick direction — your attack direction by default.
+   */
+  kind: "grab" | "pop" | "shot";
   /** Button label. */
   label: string;
   /** Label while holding the ball (grab). */
@@ -26,6 +32,8 @@ export interface AuxAction {
   launchSpeed: number;
   /** Extra sideways speed at full stick deflection. */
   aimSpeed: number;
+  /** Shot: speed toward the aim direction. */
+  shotSpeed?: number;
   /** Grab: auto-throw after holding this long (s). */
   maxHold?: number;
   /** One-line explanation for the menu. */
@@ -70,8 +78,17 @@ export interface SlimeMode {
   slimePhysics?: Partial<SlimePhysics>;
   /** Ball touching the floor ends the rally (volleyball) — the AI stops looking past it. */
   floorEndsRally?: boolean;
+  /** Bounces allowed on your side before you must hit it (tennis: 1). */
+  bouncesAllowed?: number;
+  /**
+   * Pong-style: the ball plays this much faster after every touch in a rally
+   * (×(1 + perTouch·n), up to ×max), so long rallies come to a head.
+   */
+  speedUp?: { perTouch: number; max: number };
   /** Points to win for Short / Standard / Long matches. */
   winScores: [number, number, number];
+  /** If set, matches can be played on the clock instead: seconds for Short / Standard / Long. */
+  timeLimits?: [number, number, number];
 
   /** Allowed x range for a slime's centre on this side. */
   slimeRange(side: Side, radius: number): [number, number];
@@ -96,6 +113,11 @@ export interface SlimeMode {
    * `side`'s point of view. Higher is better; roughly −4..+4.
    */
   evaluate(path: BallPath, side: Side, world: World): number;
+  /**
+   * Goal sports: the CPU drops back to defend (to `homeX`) instead of racing
+   * an opponent who'll clearly reach the ball first.
+   */
+  aiDefends?: boolean;
   /** Where to wait when there is nothing to hit. */
   homeX(world: World, side: Side): number;
 
@@ -103,11 +125,21 @@ export interface SlimeMode {
   /** Static arena art. Rendered once per layout and cached, so it must not animate. */
   drawArena(ctx: CanvasRenderingContext2D): void;
   /** Foreground pieces drawn over the ball/slimes (nets, goal mesh). */
-  drawForeground?(ctx: CanvasRenderingContext2D): void;
+  drawForeground?(ctx: CanvasRenderingContext2D, world: World): void;
   drawBall(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, angle: number): void;
 }
 
 export const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+
+/** How many more floor bounces on `side`'s half the rally allows (Infinity = no limit). */
+export function bouncesLeft(mode: SlimeMode, world: World, side: Side): number {
+  if (mode.floorEndsRally) return 0;
+  if (mode.bouncesAllowed === undefined) return Infinity;
+  return mode.bouncesAllowed - world.rally.bouncesBySide[side];
+}
+
+/** Net sports (volleyball, tennis): the floor ends rallies, so never back off. */
+export const isNetSport = (mode: SlimeMode) => mode.floorEndsRally === true || mode.bouncesAllowed !== undefined;
 
 /** True when x is in `side`'s attacking (opponent's) half. */
 export function inOpponentHalf(x: number, side: Side, width: number): boolean {
